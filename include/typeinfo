@@ -1,0 +1,39 @@
+#pragma once
+
+#include <exception>
+namespace std {
+
+class type_info {
+public:
+    virtual ~type_info();
+    bool operator==(type_info const&) const noexcept;
+    // bool operator!=(type_info const&) const;
+    bool before(type_info const&) const noexcept;
+    char const* name() const noexcept;
+
+private:
+    type_info(type_info const& rhs)            = default;
+    type_info& operator=(type_info const& rhs) = default;
+
+    char const* __type_name;
+};
+
+class bad_cast: public exception {
+public:
+    ~bad_cast();
+    bad_cast()                           = default;
+    bad_cast(bad_cast const&)            = default;
+    bad_cast& operator=(bad_cast const&) = default;
+    char const* what() const noexcept override { return "bad_cast"; }
+};
+
+class bad_typeid: public exception {
+public:
+    ~bad_typeid();
+    bad_typeid()                             = default;
+    bad_typeid(bad_typeid const&)            = default;
+    bad_typeid& operator=(bad_typeid const&) = default;
+    char const* what() const noexcept override { return "bad_typeid"; }
+};
+
+}  // namespace std

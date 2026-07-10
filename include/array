@@ -1,0 +1,193 @@
+#pragma once
+// code: language=c++
+
+#include "__iterator/pointer_wrapper.hpp"
+#include <__iterator/adaptors.hpp>
+
+#include <compare>
+#include <cstddef>
+#include <iterator>
+#include <tuple>
+#include <type_traits>
+#include <utility>
+
+namespace std {
+
+template<class T, size_t N> class array {
+public:
+    T arr_[N];
+    using value_type             = T;
+    using size_type              = size_t;
+    using difference_type        = ptrdiff_t;
+    using reference              = T&;
+    using const_reference        = T const&;
+    using pointer                = T*;
+    using const_pointer          = T const*;
+    using iterator               = __detail::__pointer_wrapper<T>;
+    using const_iterator         = __detail::__pointer_wrapper<T const>;
+    using reverse_iterator       = std::reverse_iterator<iterator>;
+    using const_reverse_iterator = std::reverse_iterator<const_iterator>;
+
+    constexpr auto begin() noexcept { return iterator(arr_); }
+    constexpr auto begin() const noexcept { return const_iterator(arr_); }
+    constexpr auto cbegin() noexcept { return begin(); }
+    constexpr auto end() noexcept { return iterator(arr_ + N); }
+    constexpr auto end() const noexcept { return const_iterator(arr_ + N); }
+    constexpr auto cend() noexcept { return end(); }
+    constexpr auto rbegin() noexcept { return reverse_iterator(end()); }
+    constexpr auto rbegin() const noexcept { return const_reverse_iterator(end()); }
+    constexpr auto crbegin() const noexcept { return rbegin(); }
+    constexpr auto rend() noexcept { return reverse_iterator(begin()); }
+    constexpr auto rend() const noexcept { return const_reverse_iterator(begin()); }
+    constexpr auto crend() const noexcept { return rend(); }
+
+    constexpr size_t size() const noexcept { return N; }
+    constexpr size_t max_size() const noexcept { return N; }
+    constexpr bool empty() const noexcept { return N == 0; }
+
+    constexpr T& front() noexcept { return arr_[0]; }
+    constexpr T const& front() const noexcept { return arr_[0]; }
+    constexpr T& back() noexcept { return arr_[N - 1]; }
+    constexpr T const& back() const noexcept { return arr_[N - 1]; }
+    constexpr T* data() noexcept { return arr_; }
+    constexpr T const* data() const noexcept { return arr_; }
+    constexpr T& operator[](size_t n) noexcept { return arr_[n]; }
+    constexpr T const& operator[](size_t n) const noexcept { return arr_[n]; }
+
+#if _STD_HAS_EXCEPTIONS
+
+    constexpr T& at(size_t n) {
+        if (n >= N) __throw_out_of_range("array::at");
+        return arr_[n];
+    }
+    constexpr T const& at(size_t n) const {
+        if (n >= N) __throw_out_of_range("array::at");
+        return arr_[n];
+    }
+#else
+    constexpr T& at(size_t)             = delete ("No exception support");
+    constexpr T const& at(size_t) const = delete ("No exception support");
+#endif
+
+    constexpr void fill(T const& v) {
+        for (auto& x: arr_) x = v;
+    }
+    constexpr void swap(array& o) noexcept(is_nothrow_swappable_v<T>) {
+        for (size_t i = 0; i < N; ++i) swap(arr_[i], o.arr_[i]);
+    }
+};
+
+template<class T> class array<T, 0> {
+public:
+    using value_type             = T;
+    using size_type              = size_t;
+    using difference_type        = ptrdiff_t;
+    using reference              = T&;
+    using const_reference        = T const&;
+    using pointer                = T*;
+    using const_pointer          = T const*;
+    using iterator               = __detail::__pointer_wrapper<T>;
+    using const_iterator         = __detail::__pointer_wrapper<T const>;
+    using reverse_iterator       = std::reverse_iterator<iterator>;
+    using const_reverse_iterator = std::reverse_iterator<const_iterator>;
+
+    constexpr auto begin() noexcept { return iterator(nullptr); }
+    constexpr auto begin() const noexcept { return const_iterator(nullptr); }
+    constexpr auto cbegin() noexcept { return begin(); }
+    constexpr auto end() noexcept { return iterator(nullptr); }
+    constexpr auto end() const noexcept { return const_iterator(nullptr); }
+    constexpr auto cend() noexcept { return end(); }
+    constexpr auto rbegin() noexcept { return reverse_iterator(end()); }
+    constexpr auto rbegin() const noexcept { return const_reverse_iterator(end()); }
+    constexpr auto crbegin() const noexcept { return rbegin(); }
+    constexpr auto rend() noexcept { return reverse_iterator(begin()); }
+    constexpr auto rend() const noexcept { return const_reverse_iterator(begin()); }
+    constexpr auto crend() const noexcept { return rend(); }
+
+    constexpr size_t size() const noexcept { return 0; }
+    constexpr size_t max_size() const noexcept { return 0; }
+    constexpr bool empty() const noexcept { return true; }
+
+    constexpr T& front() noexcept { unreachable(); }
+    constexpr T const& front() const noexcept { unreachable(); }
+    constexpr T& back() noexcept { unreachable(); }
+    constexpr T const& back() const noexcept { unreachable(); }
+    constexpr T* data() noexcept { return nullptr; }
+    constexpr T const* data() const noexcept { return nullptr; }
+    constexpr T& operator[](size_t) noexcept { unreachable(); }
+    constexpr T const& operator[](size_t) const noexcept { unreachable(); }
+
+#if _STD_HAS_EXCEPTIONS
+    constexpr T& at(size_t) { __throw_out_of_range("array<0>::at"); }
+    constexpr T const& at(size_t) const { __throw_out_of_range("array<0>::at"); }
+#else
+    constexpr T& at(size_t)             = delete;
+    constexpr T const& at(size_t) const = delete;
+#endif
+
+    constexpr void fill(T const&) {}
+    constexpr void swap(array&) noexcept(is_nothrow_swappable_v<T>) {}
+};
+
+template<class T, size_t N> constexpr bool operator==(array<T, N> const& a, array<T, N> const& b) {
+    for (size_t i = 0; i < N; ++i)
+        if (a[i] != b[i]) return false;
+    return true;
+}
+
+template<class T, size_t N>
+constexpr __synth_three_way_result<T> operator<=>(array<T, N> const& a, array<T, N> const& b) {
+    return lexicographical_compare_three_way(
+        a.begin(), a.end(), b.begin(), b.end(), __synth_three_way
+    );
+}
+
+template<size_t I, class T, size_t N> constexpr T& get(array<T, N>& x) noexcept {
+    static_assert(I < N, "get(array): Index out of range");
+    return x[I];
+}
+template<size_t I, class T, size_t N> constexpr T&& get(array<T, N>&& x) noexcept {
+    static_assert(I < N, "get(array): Index out of range");
+    return std::move(x[I]);
+}
+template<size_t I, class T, size_t N> constexpr T const& get(array<T, N> const& x) noexcept {
+    static_assert(I < N, "get(array): Index out of range");
+    return x[I];
+}
+template<size_t I, class T, size_t N> constexpr T const&& get(array<T, N> const&& x) noexcept {
+    static_assert(I < N, "get(array): Index out of range");
+    return std::move(x[I]);
+}
+
+template<class T, size_t N>
+constexpr void swap(array<T, N>& a, array<T, N>& b) noexcept(noexcept(a.swap(b))) {
+    a.swap(b);
+}
+
+template<class T, size_t N> constexpr array<remove_cv_t<T>, N> to_array(T (&a)[N]) {
+    static_assert(is_copy_constructible_v<remove_cv_t<T>>);
+    return [&]<size_t... Is>(index_sequence<Is...> = make_index_sequence<N>()) {
+        return array<remove_cv_t<T>, N>{a[Is]...};
+    }();
+}
+template<class T, size_t N> constexpr array<remove_cv_t<T>, N> to_array(T (&&a)[N]) {
+    static_assert(is_move_constructible_v<remove_cv_t<T>>);
+    return [&]<size_t... Is>(index_sequence<Is...> = make_index_sequence<N>()) {
+        return array<remove_cv_t<T>, N>{std::move(a[Is])...};
+    }();
+}
+
+template<size_t I, class T, size_t N> struct tuple_element<I, array<T, N>> {
+    using type = T;
+};
+template<class T, size_t N> struct tuple_size<array<T, N>>: integral_constant<size_t, N> {};
+
+template<class T, class... U> requires(same_as<T, U> && ...)
+array(T, U...) -> array<T, 1 + sizeof...(U)>;
+
+namespace __detail {
+template<class T> inline constexpr bool is_std_array_v                        = false;
+template<class T, size_t N> inline constexpr bool is_std_array_v<array<T, N>> = true;
+}  // namespace __detail
+
+}  // namespace std

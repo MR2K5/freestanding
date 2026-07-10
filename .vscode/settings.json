@@ -1,0 +1,10 @@
+{
+    "clangd.path": "/home/massimo/llvm/bin/clangd",
+    "clangd.arguments": [
+        "--enable-config"
+    ],
+    "cSpell.words": [
+        "unex"
+    ],
+    "cmake.sourceDirectory": "/home/massimo/projects/freestanding/subprojects/lwmem"
+}

@@ -1,0 +1,111 @@
+#pragma once
+// code: language=c++
+
+#include <__algorithm/copy_move_fill_find.hpp>
+#include <cassert>
+#include <concepts>
+#include <limits>
+#include <system_error>
+
+namespace std {
+
+struct  to_chars_result {
+    char* ptr;
+    errc ec;
+
+    friend bool operator==(to_chars_result const&, to_chars_result const&) noexcept = default;
+    explicit operator bool() const noexcept { return ec == errc{}; }
+};
+
+struct  from_chars_result {
+    char const* ptr;
+    errc ec;
+
+    friend bool operator==(from_chars_result const&, from_chars_result const&) noexcept = default;
+    explicit operator bool() const noexcept { return ec == errc{}; }
+};
+
+to_chars_result to_chars(char*, char*, bool, int = 10) noexcept = delete;
+
+template<integral T>
+constexpr to_chars_result to_chars(char* first, char* last, T val, int base = 10) noexcept {
+    assert(base >= 2 && base <= 36);
+    if (first == last) return {last, errc::value_too_large};
+    if (is_signed_v<T> && val < 0) {
+        *first++  = '-';
+        val      *= -1;
+    }
+    if (first == last) return {last, errc::value_too_large};
+
+    char* save = first;
+    while (val) {
+        char dg = char(val % base);
+        if (dg < 10)
+            dg += '0';
+        else
+            dg += 'a' - 10;
+        *first++  = dg;
+        val      /= base;
+
+        if (first == last) return {last, errc::value_too_large};
+    }
+    ranges::reverse(save, first);
+    return {first, errc()};
+}
+
+from_chars_result
+from_chars(char const* first, char const* last, bool& val, int base = 10) = delete;
+template<integral T>
+constexpr from_chars_result
+from_chars(char const*, char const*, T const&, int = 10) noexcept = delete;
+template<integral T>
+constexpr from_chars_result
+from_chars(char const* first, char const* last, T& val, int base = 10) noexcept {
+    assert(2 <= base && base <= 36);
+    if (first == last) return {last, errc::invalid_argument};
+    char const* save = first;
+
+    bool sign = false;
+    T res     = 0;
+    if constexpr (is_signed_v<T>) {
+        if (*first == '-') {
+            sign = true;
+            ++first;
+        }
+        if (first == last) return {save, errc::invalid_argument};
+    }
+
+    auto trans = [](char& ch) {
+        if ('0' <= ch && ch <= '9')
+            ch -= '0';
+        else if ('a' <= ch && ch <= 'z')
+            ch -= 'z';
+        else if ('A' <= ch && ch <= 'Z')
+            ch -= 'Z';
+        else
+            return false;
+        return true;
+    };
+
+    bool read_any = false;
+    bool overflow = false;
+    while (first != last) {
+        char dg = *first++;
+        if (!trans(dg)) break;
+        read_any = true;
+
+        if (!overflow) {
+            if (res > numeric_limits<T>::max() - dg || res + dg > numeric_limits<T>::max() / base)
+                overflow = true;
+            else
+                res = (res + dg) * base;
+        }
+    }
+
+    if (!read_any) return {save, errc::invalid_argument};
+    if (overflow) return {save, errc::result_out_of_range};
+    val = sign ? -res : res;
+    return {first, errc()};
+}
+
+}  // namespace std

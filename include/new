@@ -1,0 +1,62 @@
+#pragma once
+
+#include <cstddef>
+
+namespace std {
+
+enum class align_val_t : size_t {};
+
+using new_handler = void (*)();
+
+struct nothrow_t {
+    explicit nothrow_t() = default;
+};
+inline constexpr nothrow_t nothrow;
+
+struct destroying_delete_t {
+    explicit destroying_delete_t() = default;
+};
+inline constexpr destroying_delete_t destroying_delete;
+
+inline constexpr std::size_t hardware_destructive_interference_size  = __GCC_DESTRUCTIVE_SIZE;
+inline constexpr std::size_t hardware_constructive_interference_size = __GCC_CONSTRUCTIVE_SIZE;
+
+template<class T> constexpr T* launder(T* p) noexcept {
+    return __builtin_launder(p);
+}
+
+new_handler get_new_handler() noexcept;
+new_handler set_new_handler(new_handler h) noexcept;
+
+}  // namespace std
+
+[[nodiscard]] constexpr void* operator new(std::size_t, void* __p) noexcept {
+    return __p;
+}
+[[nodiscard]] constexpr void* operator new[](std::size_t, void* __p) noexcept {
+    return __p;
+}
+
+[[nodiscard, gnu::weak]] void* operator new(std::size_t size);
+[[nodiscard, gnu::weak]] void* operator new[](std::size_t size);
+
+[[nodiscard, gnu::weak]] void* operator new(size_t size, std::align_val_t align);
+[[nodiscard, gnu::weak]] void* operator new[](size_t size, std::align_val_t align);
+
+[[nodiscard, gnu::weak]] void* operator new(std::size_t size, std::nothrow_t const&) noexcept;
+[[nodiscard, gnu::weak]] void* operator new[](std::size_t size, std::nothrow_t const&) noexcept;
+
+[[nodiscard, gnu::weak]] void*
+operator new(std::size_t size, std::align_val_t align, std::nothrow_t const&) noexcept;
+[[nodiscard, gnu::weak]] void*
+operator new[](std::size_t size, std::align_val_t align, std::nothrow_t const&) noexcept;
+
+
+
+constexpr void operator delete(void*, void*) noexcept {}
+constexpr void operator delete[](void*, void*) noexcept {}
+
+[[gnu::weak]] void operator delete(void* ptr) noexcept;
+[[gnu::weak]] void operator delete[](void* ptr) noexcept;
+[[gnu::weak]] void operator delete(void* ptr, std::size_t size) noexcept;  // C++14 Sized delete
+[[gnu::weak]] void operator delete[](void* ptr, std::size_t size) noexcept;

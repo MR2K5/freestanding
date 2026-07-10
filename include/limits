@@ -1,0 +1,209 @@
+#pragma once
+
+#include <climits>
+#include <cwchar>
+
+namespace std {
+
+// ============================================================================
+// 1. Standard Core Floating-Point Enums
+// ============================================================================
+enum float_round_style {
+    round_indeterminable        = -1,
+    round_toward_zero           = 0,
+    round_to_nearest            = 1,
+    round_toward_infinity       = 2,
+    round_toward_negative_infinity = 3
+};
+
+enum float_denorm_style {
+    denorm_indeterminate        = -1,
+    denorm_absent               = 0,
+    denorm_present              = 1
+};
+
+// ============================================================================
+// 2. The Primary Master Template (Default unspecialized fallback)
+// ============================================================================
+template<class T> 
+struct numeric_limits {
+    static constexpr bool is_specialized = false;
+    static constexpr T min() noexcept { return T(); }
+    static constexpr T max() noexcept { return T(); }
+    static constexpr T lowest() noexcept { return T(); }
+    
+    static constexpr int digits = 0;
+    static constexpr int digits10 = 0;
+    static constexpr int max_digits10 = 0;
+    
+    static constexpr bool is_signed = false;
+    static constexpr bool is_integer = false;
+    static constexpr bool is_exact = false;
+    static constexpr int radix = 0;
+    
+    static constexpr T epsilon() noexcept { return T(); }
+    static constexpr T round_error() noexcept { return T(); }
+    
+    static constexpr int min_exponent = 0;
+    static constexpr int min_exponent10 = 0;
+    static constexpr int max_exponent = 0;
+    static constexpr int max_exponent10 = 0;
+    
+    static constexpr bool has_infinity = false;
+    static constexpr bool has_quiet_NaN = false;
+    static constexpr bool has_signaling_NaN = false;
+    static constexpr float_denorm_style has_denorm = denorm_absent;
+    static constexpr bool has_denorm_loss = false;
+    
+    static constexpr T infinity() noexcept { return T(); }
+    static constexpr T quiet_NaN() noexcept { return T(); }
+    static constexpr T signaling_NaN() noexcept { return T(); }
+    static constexpr T denorm_min() noexcept { return T(); }
+    
+    static constexpr bool is_iec559 = false;
+    static constexpr bool is_bounded = false;
+    static constexpr bool is_modulo = false;
+    
+    static constexpr bool traps = false;
+    static constexpr bool tinyness_before = false;
+    static constexpr float_round_style round_style = round_toward_zero;
+};
+
+// ============================================================================
+// 3. The Integral Specialization Generation Engine
+// ============================================================================
+#define _SPEC_NUMERIC_LIMITS_INT(T, IsSigned, Min, Max) \
+template<> struct numeric_limits<T> { \
+    static constexpr bool is_specialized = true; \
+    static constexpr T min() noexcept { return Min; } \
+    static constexpr T max() noexcept { return Max; } \
+    static constexpr T lowest() noexcept { return Min; } \
+    static constexpr int digits = sizeof(T) * __CHAR_BIT__ - (IsSigned ? 1 : 0); \
+    static constexpr int digits10 = digits * 301 / 1000; \
+    static constexpr int max_digits10 = 0; \
+    static constexpr bool is_signed = IsSigned; \
+    static constexpr bool is_integer = true; \
+    static constexpr bool is_exact = true; \
+    static constexpr int radix = 2; \
+    static constexpr T epsilon() noexcept { return 0; } \
+    static constexpr T round_error() noexcept { return 0; } \
+    static constexpr int min_exponent = 0; \
+    static constexpr int min_exponent10 = 0; \
+    static constexpr int max_exponent = 0; \
+    static constexpr int max_exponent10 = 0; \
+    static constexpr bool has_infinity = false; \
+    static constexpr bool has_quiet_NaN = false; \
+    static constexpr bool has_signaling_NaN = false; \
+    static constexpr float_denorm_style has_denorm = denorm_absent; \
+    static constexpr bool has_denorm_loss = false; \
+    static constexpr T infinity() noexcept { return 0; } \
+    static constexpr T quiet_NaN() noexcept { return 0; } \
+    static constexpr T signaling_NaN() noexcept { return 0; } \
+    static constexpr T denorm_min() noexcept { return 0; } \
+    static constexpr bool is_iec559 = false; \
+    static constexpr bool is_bounded = true; \
+    static constexpr bool is_modulo = !IsSigned; \
+    static constexpr bool traps = false; \
+    static constexpr bool tinyness_before = false; \
+    static constexpr float_round_style round_style = round_toward_zero; \
+};
+
+// Fire the engine for all standard integral types
+_SPEC_NUMERIC_LIMITS_INT(char,           (CHAR_MIN < 0), CHAR_MIN, CHAR_MAX)
+_SPEC_NUMERIC_LIMITS_INT(signed char,    true,  (-SCHAR_MAX - 1), SCHAR_MAX)
+_SPEC_NUMERIC_LIMITS_INT(unsigned char,  false, 0, UCHAR_MAX)
+_SPEC_NUMERIC_LIMITS_INT(short,          true,  (-SHRT_MAX - 1),  SHRT_MAX)
+_SPEC_NUMERIC_LIMITS_INT(unsigned short, false, 0, USHRT_MAX)
+_SPEC_NUMERIC_LIMITS_INT(int,            true,  (-INT_MAX - 1),   INT_MAX)
+_SPEC_NUMERIC_LIMITS_INT(unsigned int,   false, 0, UINT_MAX)
+_SPEC_NUMERIC_LIMITS_INT(long,           true,  (-LONG_MAX - 1),  LONG_MAX)
+_SPEC_NUMERIC_LIMITS_INT(unsigned long,  false, 0, ULONG_MAX)
+_SPEC_NUMERIC_LIMITS_INT(long long,      true,  (-LLONG_MAX - 1), LLONG_MAX)
+_SPEC_NUMERIC_LIMITS_INT(unsigned long long, false, 0, ULLONG_MAX)
+_SPEC_NUMERIC_LIMITS_INT(wchar_t,        (WCHAR_MIN < 0), WCHAR_MIN, WCHAR_MAX)
+
+#undef _SPEC_NUMERIC_LIMITS_INT
+
+// Explicit unique manual definition for Boolean properties
+template<> struct numeric_limits<bool> {
+    static constexpr bool is_specialized = true;
+    static constexpr bool min() noexcept { return false; }
+    static constexpr bool max() noexcept { return true; }
+    static constexpr bool lowest() noexcept { return false; }
+    static constexpr int digits = 1;
+    static constexpr int digits10 = 0;
+    static constexpr int max_digits10 = 0;
+    static constexpr bool is_signed = false;
+    static constexpr bool is_integer = true;
+    static constexpr bool is_exact = true;
+    static constexpr int radix = 2;
+    static constexpr bool epsilon() noexcept { return false; }
+    static constexpr bool round_error() noexcept { return false; }
+    static constexpr int min_exponent = 0;
+    static constexpr int min_exponent10 = 0;
+    static constexpr int max_exponent = 0;
+    static constexpr int max_exponent10 = 0;
+    static constexpr bool has_infinity = false;
+    static constexpr bool has_quiet_NaN = false;
+    static constexpr bool has_signaling_NaN = false;
+    static constexpr float_denorm_style has_denorm = denorm_absent;
+    static constexpr bool has_denorm_loss = false;
+    static constexpr bool infinity() noexcept { return false; }
+    static constexpr bool quiet_NaN() noexcept { return false; }
+    static constexpr bool signaling_NaN() noexcept { return false; }
+    static constexpr bool denorm_min() noexcept { return false; }
+    static constexpr bool is_iec559 = false;
+    static constexpr bool is_bounded = true;
+    static constexpr bool is_modulo = false;
+    static constexpr bool traps = false;
+    static constexpr bool tinyness_before = false;
+    static constexpr float_round_style round_style = round_toward_zero;
+};
+
+// ============================================================================
+// 4. The Floating-Point Specialization Generation Engine
+// ============================================================================
+#define _SPEC_NUMERIC_LIMITS_FLT(T, Prefix, InfB, NanB, NansB) \
+template<> struct numeric_limits<T> { \
+    static constexpr bool is_specialized = true; \
+    static constexpr T min() noexcept { return Prefix##_MIN__; } \
+    static constexpr T max() noexcept { return Prefix##_MAX__; } \
+    static constexpr T lowest() noexcept { return -Prefix##_MAX__; } \
+    static constexpr int digits = Prefix##_MANT_DIG__; \
+    static constexpr int digits10 = Prefix##_DIG__; \
+    static constexpr int max_digits10 = Prefix##_DECIMAL_DIG__; \
+    static constexpr bool is_signed = true; \
+    static constexpr bool is_integer = false; \
+    static constexpr bool is_exact = false; \
+    static constexpr int radix = __FLT_RADIX__; \
+    static constexpr T epsilon() noexcept { return Prefix##_EPSILON__; } \
+    static constexpr T round_error() noexcept { return static_cast<T>(0.5); } \
+    static constexpr int min_exponent = Prefix##_MIN_EXP__; \
+    static constexpr int min_exponent10 = Prefix##_MIN_10_EXP__; \
+    static constexpr int max_exponent = Prefix##_MAX_EXP__; \
+    static constexpr int max_exponent10 = Prefix##_MAX_10_EXP__; \
+    static constexpr bool has_infinity = Prefix##_HAS_INFINITY__; \
+    static constexpr bool has_quiet_NaN = Prefix##_HAS_QUIET_NAN__; \
+    static constexpr bool has_signaling_NaN = Prefix##_HAS_QUIET_NAN__; \
+    static constexpr float_denorm_style has_denorm = Prefix##_HAS_DENORM__ ? denorm_present : denorm_absent; \
+    static constexpr bool has_denorm_loss = false; \
+    static constexpr T infinity() noexcept { return InfB(); } \
+    static constexpr T quiet_NaN() noexcept { return NanB(""); } \
+    static constexpr T signaling_NaN() noexcept { return NansB(""); } \
+    static constexpr T denorm_min() noexcept { return Prefix##_DENORM_MIN__; } \
+    static constexpr bool is_iec559 = true; \
+    static constexpr bool is_bounded = true; \
+    static constexpr bool is_modulo = false; \
+    static constexpr bool traps = false; \
+    static constexpr bool tinyness_before = false; \
+    static constexpr float_round_style round_style = round_to_nearest; \
+};
+
+// Fire the engine for floating-point configurations
+_SPEC_NUMERIC_LIMITS_FLT(float,       __FLT,  __builtin_inff, __builtin_nanf, __builtin_nansf)
+_SPEC_NUMERIC_LIMITS_FLT(double,      __DBL,  __builtin_inf,  __builtin_nan,  __builtin_nans)
+_SPEC_NUMERIC_LIMITS_FLT(long double, __LDBL, __builtin_infl, __builtin_nanl, __builtin_nansl)
+
+#undef _SPEC_NUMERIC_LIMITS_FLT
+
+} // namespace std

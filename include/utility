@@ -1,0 +1,684 @@
+#pragma once
+
+#include "compare"
+#include <concepts>
+#include <cstddef>
+#include <initializer_list>
+#include <type_traits>
+
+namespace std {
+
+template<class T> constexpr T&& forward(remove_reference_t<T>& t) noexcept {
+    return static_cast<T&&>(t);
+}
+template<class T> constexpr T&& forward(remove_reference_t<T>&& t) noexcept {
+    return static_cast<T&&>(t);
+}
+
+// template<class T> constexpr remove_reference_t<T>&& move(T&& t) noexcept {
+//     return static_cast<remove_reference_t<T>&&>(t);
+// }
+
+template<class _Tp>
+using __move_if_noexcept_result_t = conditional_t<
+    !is_nothrow_move_constructible_v<_Tp> && is_copy_constructible_v<_Tp>, _Tp const&, _Tp&&>;
+
+template<class _Tp>
+[[nodiscard]] inline constexpr __move_if_noexcept_result_t<_Tp>
+move_if_noexcept(_Tp& __x) noexcept {
+    return std::move(__x);
+}
+
+template<class T> void as_const(T const&&) = delete;
+template<class T> constexpr add_const_t<T> as_const(T& t) noexcept {
+    return t;
+}
+
+template<class T, class U> constexpr auto&& forward_like(U&& x) noexcept {
+    constexpr bool is_adding_const = std::is_const_v<std::remove_reference_t<T>>;
+    if constexpr (is_lvalue_reference_v<T&&>) {
+        if constexpr (is_adding_const)
+            return std::as_const(x);
+        else
+            return static_cast<U&>(x);
+    } else {
+        if constexpr (is_adding_const)
+            return std::move(std::as_const(x));
+        else
+            return std::move(x);
+    }
+}
+
+template<class Enum> constexpr std::underlying_type_t<Enum> to_underlying(Enum e) noexcept {
+    return static_cast<underlying_type_t<Enum>>(e);
+}
+
+[[noreturn]] inline void unreachable() {
+    __builtin_unreachable();
+}
+
+template<class T>
+constexpr void swap(T& a, T& b) noexcept(
+    std::is_nothrow_move_constructible<T>::value && std::is_nothrow_move_assignable<T>::value
+) requires is_move_assignable_v<T> && is_move_assignable_v<T> {
+    T tmp(std::move(a));
+    a = std::move(b);
+    b = std::move(tmp);
+}
+
+template<class T2, std::size_t N> void swap(T2 (&a)[N], T2 (&b)[N]) {
+    using std::swap;
+    for (size_t i = 0; i < N; ++i) swap(a[i], b[i]);
+}
+
+template<class T, class U = T>
+constexpr T exchange(
+    T& obj, U&& nw
+) noexcept(is_nothrow_move_constructible_v<T> && is_nothrow_assignable_v<T&, U>) {
+    T old = std::move(obj);
+    obj   = FWD(nw);
+    return old;
+}
+
+template<class T, T... Is> struct integer_sequence {
+    using value_type = T;
+    static constexpr size_t size() noexcept { return sizeof...(Is); }
+};
+template<size_t... Is> using index_sequence        = integer_sequence<size_t, Is...>;
+template<class T, T N> using make_integer_sequence = __make_integer_seq<integer_sequence, T, N>;
+template<size_t N> using make_index_sequence       = make_integer_sequence<size_t, N>;
+template<class... Ts> using index_sequence_for     = make_index_sequence<sizeof...(Ts)>;
+
+// pair piecewise construction
+struct piecewise_construct_t {
+    explicit piecewise_construct_t() = default;
+};
+struct allocator_arg_t {
+    explicit allocator_arg_t() = default;
+};
+inline constexpr allocator_arg_t allocator_arg;
+
+inline constexpr piecewise_construct_t piecewise_construct{};
+template<class... Types> struct tuple;  // defined in <tuple>
+
+// in-place construction
+struct in_place_t {
+    explicit in_place_t() = default;
+};
+inline constexpr in_place_t in_place{};
+
+template<class T> struct in_place_type_t {
+    explicit in_place_type_t() = default;
+};
+template<class T> inline constexpr in_place_type_t<T> in_place_type{};
+
+template<size_t I> struct in_place_index_t {
+    explicit in_place_index_t() = default;
+};
+template<size_t I> inline constexpr in_place_index_t<I> in_place_index{};
+
+// nontype argument tag
+template<auto V> struct nontype_t {
+    explicit nontype_t() = default;
+};
+template<auto V> inline constexpr nontype_t<V> nontype{};
+
+template<class T> struct tuple_size;
+template<class T> inline constexpr bool tuple_size_v = tuple_size<T>::value;
+template<class T> struct tuple_size<T const>: integral_constant<size_t, tuple_size_v<T>> {};
+template<class T> struct tuple_size<T volatile>: integral_constant<size_t, tuple_size_v<T>> {};
+template<class T>
+struct tuple_size<T const volatile>: integral_constant<size_t, tuple_size_v<T>> {};
+
+template<size_t I, class T> struct tuple_element;
+template<size_t I, class T> struct tuple_element<I, T const> {
+    using type = add_const_t<typename tuple_element<I, T>::type>;
+};
+template<size_t I, class T> struct tuple_element<I, T volatile> {
+    using type = add_volatile_t<typename tuple_element<I, T>::type>;
+};
+template<size_t I, class T> struct tuple_element<I, T const volatile> {
+    using type = add_cv_t<typename tuple_element<I, T>::type>;
+};
+template<size_t I, class T> using tuple_element_t = tuple_element<I, T>::type;
+
+template<class... Ts> struct tuple;
+struct monostate;
+
+struct ignore_t {
+    constexpr ignore_t const& operator=(auto const&) const noexcept { return *this; }
+};
+inline constexpr ignore_t ignore;
+
+template<class _Tp>
+concept __implicitly_default_constructible = requires {
+    [](_Tp) {
+    }({});
+};
+
+template<class T> inline constexpr bool __enable_tuple_like = false;
+template<class T> concept __tuple_like = __enable_tuple_like<remove_cvref_t<T>>;
+template<class T> concept __pair_like  = __tuple_like<T> && tuple_size_v<remove_cvref_t<T>> == 2;
+
+template<class T> inline constexpr bool __is_subrange_v = false;
+
+template<size_t I> void get(auto) = delete;
+
+template<class T, class U> struct pair {
+    using first_type  = T;
+    using second_type = U;
+    T first;
+    U second;
+
+    explicit(
+        !__implicitly_default_constructible<T> || !__implicitly_default_constructible<U>
+    ) constexpr pair() requires is_default_constructible_v<T> && is_default_constructible_v<U>
+    = default;
+
+    explicit(!is_convertible_v<T const&, T> || !is_convertible_v<U const&, U>) constexpr pair(
+        T const& t, U const& u
+    ) requires is_copy_constructible_v<T> && is_copy_constructible_v<U>
+        : first(t), second(u) {}
+
+    template<class T2 = T, class U2 = U>
+    explicit(!is_convertible_v<T2, T> || !is_convertible_v<U2, U>) constexpr pair(T2&& t2, U2&& u2)
+        requires is_constructible_v<T, T2> && is_constructible_v<U, U2>
+        : first(FWD(t2)), second(FWD(u2)) {}
+
+    template<class T2, class U2>
+    explicit(!is_convertible_v<T2&, T> || !is_convertible_v<U2&, U>) constexpr pair(pair<T2, U2>& p)
+        requires is_constructible_v<T, T2&> && is_constructible_v<U, U2&>
+        : first(p.first), second(p.second) {}
+
+    template<class T2, class U2>
+    explicit(!is_convertible_v<T2 const&, T> || !is_convertible_v<U2 const&, U>) constexpr pair(
+        pair<T2, U2> const& p
+    ) requires is_constructible_v<T, T2 const&> && is_constructible_v<U, U2 const&>
+        : first(p.first), second(p.second) {}
+
+    template<class T2, class U2>
+    explicit(!is_convertible_v<T2, T> || !is_convertible_v<U2, U>) constexpr pair(pair<T2, U2>&& p)
+        requires is_constructible_v<T, T2> && is_constructible_v<U, U2>
+        : first(FWD(p.first)), second(FWD(p.second)) {}
+
+    template<class T2, class U2>
+    explicit(!is_convertible_v<T2 const, T> || !is_convertible_v<U2 const, U>) constexpr pair(
+        pair<T2, U2> const&& p
+    ) requires is_constructible_v<T, T2 const> && is_constructible_v<U, U2 const>
+        : first(FWD(p.first)), second(FWD(p.second)) {}
+
+    template<__pair_like P>
+    explicit(
+        !is_convertible_v<decltype(std::get<0>(declval<P>())), T>
+        || !is_convertible_v<decltype(std::get<1>(declval<P>())), U>
+    ) constexpr pair(P&& p) requires(!__is_subrange_v<remove_cvref_t<P>>
+                                     && is_constructible_v<T, decltype(std::get<0>(declval<P>()))>
+                                     && is_constructible_v<U, decltype(std::get<1>(declval<P>()))>)
+        : first(std::get<0>(FWD(p))), second(std::get<1>(FWD(p))) {}
+
+    // TODO Needs tuple
+    // template<class... As1, class... As2>
+    // constexpr pair(piecewise_construct_t, )
+    pair(pair const&) = default;
+    pair(pair&&)      = default;
+
+    constexpr pair& operator=(pair const&)
+        requires is_copy_assignable_v<T> && is_copy_assignable_v<U> = default;
+
+    constexpr pair const& operator=(pair const& o) const
+        requires is_copy_assignable_v<T const> && is_copy_assignable_v<U const> {
+        first  = o.first;
+        second = o.second;
+        return *this;
+    }
+
+    constexpr pair&
+    operator=(pair&& o) noexcept(is_nothrow_move_assignable_v<T> && is_nothrow_move_assignable_v<U>)
+        requires is_move_assignable_v<T> && is_move_assignable_v<U> = default;
+
+    constexpr pair const& operator=(pair&& o) const
+        requires is_assignable_v<T const&&, T> && is_assignable_v<U const&&, U> {
+        first  = std::move(o.first);
+        second = std::move(o.second);
+        return *this;
+    }
+
+    template<class T2, class U2>
+    constexpr pair& operator=(pair<T2, U2> const& o)
+        requires is_assignable_v<T&, T2 const&> && is_assignable_v<U&, U2 const&> {
+        first  = o.first;
+        second = o.second;
+        return *this;
+    }
+    template<class T2, class U2>
+    constexpr pair const& operator=(pair<T2, U2> const& o) const
+        requires is_assignable_v<T const&, T2 const&> && is_assignable_v<U const&, U2 const&> {
+        first  = o.first;
+        second = o.second;
+        return *this;
+    }
+
+    template<class T2, class U2>
+    constexpr pair& operator=(pair<T2, U2>&& o)
+        requires is_assignable_v<T&, T2> && is_assignable_v<U&, U2> {
+        first  = std::forward<T2>(o.first);
+        second = std::forward<U2>(o.second);
+        return *this;
+    }
+    template<class T2, class U2>
+    constexpr pair const& operator=(pair<T2, U2>&& o) const
+        requires is_assignable_v<T const&, T2> && is_assignable_v<U const&, U2> {
+        first  = std::forward<T2>(o.first);
+        second = std::forward<U2>(o.second);
+        return *this;
+    }
+
+    template<__pair_like P>
+    constexpr pair& operator=(P&& p) requires(
+        !same_as<remove_cvref_t<P>, pair> && !__is_subrange_v<remove_cvref_t<P>>
+        && is_assignable_v<T&, decltype(std::get<0>(FWD(p)))>
+        && is_assignable_v<U&, decltype(std::get<1>(FWD(p)))>
+    ) {
+        first  = std::get<0>(FWD(p));
+        second = std::get<1>(FWD(p));
+        return *this;
+    }
+    template<__pair_like P>
+    constexpr pair const& operator=(P&& p) const requires(
+        !same_as<remove_cvref_t<P>, pair> && !__is_subrange_v<remove_cvref_t<P>>
+        && is_assignable_v<T const&, decltype(std::get<0>(FWD(p)))>
+        && is_assignable_v<U const&, decltype(std::get<1>(FWD(p)))>
+    ) {
+        first  = std::get<0>(FWD(p));
+        second = std::get<1>(FWD(p));
+        return *this;
+    }
+
+    constexpr void swap(pair& o) noexcept(is_nothrow_swappable_v<T> && is_nothrow_swappable_v<U>) {
+        static_assert(is_swappable_v<T> && is_swappable_v<U>);
+        using std::swap;
+        swap(first, o.first);
+        swap(second, o.second);
+    }
+    constexpr void swap(
+        pair const& o
+    ) const noexcept(is_nothrow_swappable_v<T const> && is_nothrow_swappable_v<U const>) {
+        static_assert(is_swappable_v<T const> && is_swappable_v<U const>);
+        using std::swap;
+        swap(first, o.first);
+        swap(second, o.second);
+    }
+};
+
+template<class T, class U> inline constexpr bool __enable_tuple_like<pair<T, U>> = true;
+
+template<class T1, class T2>
+constexpr pair<unwrap_ref_decay_t<T1>, unwrap_ref_decay_t<T2>> make_pair(T1&& x, T2&& y) {
+    return pair<unwrap_ref_decay_t<T1>, unwrap_ref_decay_t<T2>>{FWD(x), FWD(y)};
+}
+
+template<class T1, class T2, class U1, class U2>
+constexpr bool operator==(std::pair<T1, T2> const& lhs, std::pair<U1, U2> const& rhs)
+    requires requires {
+        { lhs.first == rhs.first } -> boolean_testable;
+        { lhs.second == rhs.second } -> boolean_testable;
+    } {
+    return lhs.first == rhs.first && lhs.second == rhs.second;
+}
+
+template<class T1, class T2, class U1, class U2>
+constexpr common_comparison_category_t<
+    __synth_three_way_result<T1, U1>, __synth_three_way_result<T2, U2>>
+operator<=>(std::pair<T1, T2> const& lhs, std::pair<U1, U2> const& rhs) requires requires {
+    { lhs.first == rhs.first } -> boolean_testable;
+    { lhs.second == rhs.second } -> boolean_testable;
+} {
+    if (auto x = __synth_three_way(lhs.first, rhs.first); x != 0) return x;
+    return __synth_three_way(lhs.second, rhs.second);
+}
+
+template<class T1, class T2>
+constexpr void swap(pair<T1, T2>& x, pair<T1, T2>& y) noexcept(noexcept(x.swap(y)))
+    requires is_swappable_v<T1> && is_swappable_v<T2> {
+    x.swap(y);
+}
+template<class T1, class T2>
+constexpr void swap(pair<T1, T2> const& x, pair<T1, T2> const& y) noexcept(noexcept(x.swap(y)))
+    requires is_swappable_v<T1 const> && is_swappable_v<T2 const> {
+    x.swap(y);
+}
+
+template<size_t I, class T, class U>
+constexpr tuple_element_t<I, pair<T, U>>& get(pair<T, U>& p) noexcept {
+    static_assert(I <= 1);
+    if constexpr (I == 0)
+        return p.first;
+    else
+        return p.second;
+}
+template<size_t I, class T, class U>
+constexpr tuple_element_t<I, pair<T, U>> const& get(pair<T, U> const& p) noexcept {
+    static_assert(I <= 1);
+    if constexpr (I == 0)
+        return p.first;
+    else
+        return p.second;
+}
+template<size_t I, class T, class U>
+constexpr tuple_element_t<I, pair<T, U>>&& get(pair<T, U>&& p) noexcept {
+    static_assert(I <= 1);
+    if constexpr (I == 0)
+        return std::forward<T>(p.first);
+    else
+        return std::forward<U>(p.second);
+}
+template<size_t I, class T, class U>
+constexpr tuple_element_t<I, pair<T, U>> const&& get(pair<T, U> const&& p) noexcept {
+    static_assert(I <= 1);
+    if constexpr (I == 0)
+        return std::forward<T>(p.first);
+    else
+        return std::forward<U>(p.second);
+}
+
+template<class T, class U> constexpr T& get(pair<T, U>& p) noexcept {
+    return p.first;
+}
+template<class T, class U> constexpr T const& get(pair<T, U> const& p) noexcept {
+    return p.first;
+}
+template<class T, class U> constexpr T&& get(pair<T, U>&& p) noexcept {
+    return std::forward<T>(p.first);
+}
+template<class T, class U> constexpr T const&& get(pair<T, U> const&& p) noexcept {
+    return std::forward<T>(p.first);
+}
+template<class T, class U> constexpr T& get(pair<U, T>& p) noexcept {
+    return p.second;
+}
+template<class T, class U> constexpr T const& get(pair<U, T> const& p) noexcept {
+    return p.second;
+}
+template<class T, class U> constexpr T&& get(pair<U, T>&& p) noexcept {
+    return std::forward<T>(p.second);
+}
+template<class T, class U> constexpr T const&& get(pair<U, T> const&& p) noexcept {
+    return std::forward<T>(p.second);
+}
+
+template<class T, class U> struct tuple_size<pair<T, U>>: integral_constant<size_t, 2> {};
+template<size_t I, class T, class U> struct tuple_element<I, pair<T, U>> {
+    static_assert(I <= 1);
+    using type = conditional<I == 0, T, U>;
+};
+
+template<
+    class T1, class T2, class U1, class U2, template<class> class TQual,
+    template<class> class UQual>
+requires requires {
+    typename pair<
+        common_reference_t<TQual<T1>, UQual<U1>>, common_reference_t<TQual<T2>, UQual<U2>>>;
+} struct basic_common_reference<pair<T1, T2>, pair<U1, U2>, TQual, UQual> {
+    using type =
+        pair<common_reference_t<TQual<T1>, UQual<U1>>, common_reference_t<TQual<T2>, UQual<U2>>>;
+};
+
+template<class T1, class T2, class U1, class U2> requires requires {
+    typename pair<common_type_t<T1, U1>, common_type_t<T2, U2>>;
+} struct common_type<pair<T1, T2>, pair<U1, U2>> {
+    using type = pair<common_type_t<T1, U1>, common_type_t<T2, U2>>;
+};
+
+template<class T, class U> pair(T, U) -> pair<T, U>;
+
+template<class T> struct __cw_fixed_value {
+    using type = T;
+    constexpr __cw_fixed_value(type v) noexcept: data(v) {}
+    T data;
+};
+
+template<class T, size_t Extent> struct __cw_fixed_value<T[Extent]> {
+    using type = T[Extent];
+    constexpr __cw_fixed_value(T (&arr)[Extent]) noexcept
+        : __cw_fixed_value(make_index_sequence<Extent>{}, arr) {}
+    T data[Extent];
+
+private:
+    template<size_t... Is>
+    constexpr __cw_fixed_value(index_sequence<Is...>, T (&arr)[Extent]) noexcept
+        : data{arr[Is]...} {}
+};
+
+template<class T, size_t Extent> __cw_fixed_value(T (&)[Extent]) -> __cw_fixed_value<T[Extent]>;
+
+template<__cw_fixed_value X, class = typename decltype(X)::type> struct constant_wrapper;
+
+template<class T> concept __constexpr_param = requires { typename constant_wrapper<T::value>; };
+
+struct __cw_operators {
+    // unary operators
+    template<__constexpr_param T>
+    friend constexpr auto operator+(T) noexcept -> constant_wrapper<(+T::value)> {
+        return {};
+    }
+    template<__constexpr_param T>
+    friend constexpr auto operator-(T) noexcept -> constant_wrapper<(-T::value)> {
+        return {};
+    }
+    template<__constexpr_param T>
+    friend constexpr auto operator~(T) noexcept -> constant_wrapper<(~T::value)> {
+        return {};
+    }
+    template<__constexpr_param T>
+    friend constexpr auto operator!(T) noexcept -> constant_wrapper<(!T::value)> {
+        return {};
+    }
+    template<__constexpr_param T>
+    friend constexpr auto operator&(T) noexcept -> constant_wrapper<(&T::value)> {
+        return {};
+    }
+    template<__constexpr_param T>
+    friend constexpr auto operator*(T) noexcept -> constant_wrapper<(*T::value)> {
+        return {};
+    }
+
+    // binary operators
+    template<__constexpr_param L, __constexpr_param R>
+    friend constexpr auto operator+(L, R) noexcept -> constant_wrapper<(L::value + R::value)> {
+        return {};
+    }
+    template<__constexpr_param L, __constexpr_param R>
+    friend constexpr auto operator-(L, R) noexcept -> constant_wrapper<(L::value - R::value)> {
+        return {};
+    }
+    template<__constexpr_param L, __constexpr_param R>
+    friend constexpr auto operator*(L, R) noexcept -> constant_wrapper<(L::value * R::value)> {
+        return {};
+    }
+    template<__constexpr_param L, __constexpr_param R>
+    friend constexpr auto operator/(L, R) noexcept -> constant_wrapper<(L::value / R::value)> {
+        return {};
+    }
+    template<__constexpr_param L, __constexpr_param R>
+    friend constexpr auto operator%(L, R) noexcept -> constant_wrapper<(L::value % R::value)> {
+        return {};
+    }
+
+    template<__constexpr_param L, __constexpr_param R>
+    friend constexpr auto operator<<(L, R) noexcept -> constant_wrapper<(L::value << R::value)> {
+        return {};
+    }
+    template<__constexpr_param L, __constexpr_param R>
+    friend constexpr auto operator>>(L, R) noexcept -> constant_wrapper<(L::value >> R::value)> {
+        return {};
+    }
+    template<__constexpr_param L, __constexpr_param R>
+    friend constexpr auto operator&(L, R) noexcept -> constant_wrapper<(L::value & R::value)> {
+        return {};
+    }
+    template<__constexpr_param L, __constexpr_param R>
+    friend constexpr auto operator|(L, R) noexcept -> constant_wrapper<(L::value | R::value)> {
+        return {};
+    }
+    template<__constexpr_param L, __constexpr_param R>
+    friend constexpr auto operator^(L, R) noexcept -> constant_wrapper<(L::value ^ R::value)> {
+        return {};
+    }
+
+    template<__constexpr_param L, __constexpr_param R> requires(
+        !is_constructible_v<bool, decltype(L::value)>
+        || !is_constructible_v<bool, decltype(R::value)>
+    )
+    friend constexpr auto operator&&(L, R) noexcept -> constant_wrapper<(L::value && R::value)> {
+        return {};
+    }
+    template<__constexpr_param L, __constexpr_param R> requires(
+        !is_constructible_v<bool, decltype(L::value)>
+        || !is_constructible_v<bool, decltype(R::value)>
+    )
+    friend constexpr auto operator||(L, R) noexcept -> constant_wrapper<(L::value || R::value)> {
+        return {};
+    }
+
+    // comparisons
+    template<__constexpr_param L, __constexpr_param R>
+    friend constexpr auto operator<=>(L, R) noexcept -> constant_wrapper<(L::value <=> R::value)> {
+        return {};
+    }
+    template<__constexpr_param L, __constexpr_param R>
+    friend constexpr auto operator<(L, R) noexcept -> constant_wrapper<(L::value < R::value)> {
+        return {};
+    }
+    template<__constexpr_param L, __constexpr_param R>
+    friend constexpr auto operator<=(L, R) noexcept -> constant_wrapper<(L::value <= R::value)> {
+        return {};
+    }
+    template<__constexpr_param L, __constexpr_param R>
+    friend constexpr auto operator==(L, R) noexcept -> constant_wrapper<(L::value == R::value)> {
+        return {};
+    }
+    template<__constexpr_param L, __constexpr_param R>
+    friend constexpr auto operator!=(L, R) noexcept -> constant_wrapper<(L::value != R::value)> {
+        return {};
+    }
+    template<__constexpr_param L, __constexpr_param R>
+    friend constexpr auto operator>(L, R) noexcept -> constant_wrapper<(L::value > R::value)> {
+        return {};
+    }
+    template<__constexpr_param L, __constexpr_param R>
+    friend constexpr auto operator>=(L, R) noexcept -> constant_wrapper<(L::value >= R::value)> {
+        return {};
+    }
+
+    template<__constexpr_param L, __constexpr_param R>
+    friend constexpr auto operator,(L, R) noexcept = delete;
+    template<__constexpr_param L, __constexpr_param R>
+    friend constexpr auto operator->*(L, R) noexcept -> constant_wrapper<L::value->*(R::value)> {
+        return {};
+    }
+
+    // pseudo-mutators
+    template<__constexpr_param T>
+    constexpr auto operator++(this T) noexcept -> constant_wrapper<(++T::value)> {
+        return {};
+    }
+    template<__constexpr_param T>
+    constexpr auto operator++(this T, int) noexcept -> constant_wrapper<(T::value++)> {
+        return {};
+    }
+    template<__constexpr_param T>
+    constexpr auto operator--(this T) noexcept -> constant_wrapper<(--T::value)> {
+        return {};
+    }
+    template<__constexpr_param T>
+    constexpr auto operator--(this T, int) noexcept -> constant_wrapper<(T::value--)> {
+        return {};
+    }
+
+    template<__constexpr_param T, __constexpr_param R>
+    constexpr auto operator+=(this T, R) noexcept -> constant_wrapper<(T::value += R::value)> {
+        return {};
+    }
+    template<__constexpr_param T, __constexpr_param R>
+    constexpr auto operator-=(this T, R) noexcept -> constant_wrapper<(T::value -= R::value)> {
+        return {};
+    }
+    template<__constexpr_param T, __constexpr_param R>
+    constexpr auto operator*=(this T, R) noexcept -> constant_wrapper<(T::value *= R::value)> {
+        return {};
+    }
+    template<__constexpr_param T, __constexpr_param R>
+    constexpr auto operator/=(this T, R) noexcept -> constant_wrapper<(T::value /= R::value)> {
+        return {};
+    }
+    template<__constexpr_param T, __constexpr_param R>
+    constexpr auto operator%=(this T, R) noexcept -> constant_wrapper<(T::value %= R::value)> {
+        return {};
+    }
+    template<__constexpr_param T, __constexpr_param R>
+    constexpr auto operator&=(this T, R) noexcept -> constant_wrapper<(T::value &= R::value)> {
+        return {};
+    }
+    template<__constexpr_param T, __constexpr_param R>
+    constexpr auto operator|=(this T, R) noexcept -> constant_wrapper<(T::value |= R::value)> {
+        return {};
+    }
+    template<__constexpr_param T, __constexpr_param R>
+    constexpr auto operator^=(this T, R) noexcept -> constant_wrapper<(T::value ^= R::value)> {
+        return {};
+    }
+    template<__constexpr_param T, __constexpr_param R>
+    constexpr auto operator<<=(this T, R) noexcept -> constant_wrapper<(T::value <<= R::value)> {
+        return {};
+    }
+    template<__constexpr_param T, __constexpr_param R>
+    constexpr auto operator>>=(this T, R) noexcept -> constant_wrapper<(T::value >>= R::value)> {
+        return {};
+    }
+};
+
+template<__cw_fixed_value X, class> struct constant_wrapper: __cw_operators {
+    static constexpr auto const& value = X.data;
+    using type                         = constant_wrapper;
+    using value_type                   = decltype(X)::type;
+
+    template<__constexpr_param R>
+    constexpr auto operator=(R) const noexcept -> constant_wrapper<(value = R::value)> {
+        return {};
+    }
+
+    constexpr operator decltype(value)() const noexcept { return value; }
+
+    template<class... Args>
+    static constexpr decltype(auto) operator()(Args&&... args) noexcept(
+        noexcept(std::invoke(value, remove_cvref_t<Args>::value...))
+    ) requires(__constexpr_param<remove_cvref_t<Args>> && ...) && requires {
+        typename constant_wrapper<std::invoke(value, remove_cvref_t<Args>::value...)>;
+    } {
+        return constant_wrapper<std::invoke(value, remove_cvref_t<Args>::value...)>{};
+    }
+
+    template<class... Args>
+    static constexpr decltype(auto)
+    operator()(Args&&... args) noexcept(noexcept(std::invoke(value, FWD(args)...))) {
+        return std::invoke(value, FWD(args)...);
+    }
+
+    template<class... Args>
+    static constexpr decltype(auto)
+    operator[](Args&&... args) noexcept(noexcept(value[remove_cvref_t<Args>::value...]))
+        requires(__constexpr_param<remove_cvref_t<Args>> && ...)
+             && requires { typename constant_wrapper<value[remove_cvref_t<Args>::value...]>; } {
+        return constant_wrapper<value[remove_cvref_t<Args>::value...]>{};
+    }
+
+    template<class... Args>
+    static constexpr decltype(auto)
+    operator[](Args&&... args) noexcept(noexcept(value[FWD(args)...])) {
+        return value[FWD(args)...];
+    }
+};
+
+template<__cw_fixed_value X> constexpr auto cw = constant_wrapper<X>{};
+
+}  // namespace std

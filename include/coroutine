@@ -1,0 +1,160 @@
+#pragma once
+
+#include <__memory/base.hpp>
+#include <compare>
+#include <type_traits>
+
+namespace std {
+
+// [coroutine.traits], coroutine traits
+template<class R, class... ArgTypes> struct coroutine_traits {};
+
+template<class R, class... ArgTypes> requires requires { typename R::promise_type; }
+struct coroutine_traits<R, ArgTypes...> {
+    using promise_type = R::promise_type;
+};
+
+// [coroutine.handle], coroutine handle
+template<class Promise = void> struct coroutine_handle;
+
+template<> struct coroutine_handle<void> {
+    // [coroutine.handle.con], construct/reset
+    constexpr coroutine_handle() noexcept = default;
+    constexpr coroutine_handle(nullptr_t) noexcept {}
+    coroutine_handle& operator=(nullptr_t) noexcept {
+        ptr = nullptr;
+        return *this;
+    }
+
+    // [coroutine.handle.export.import], export/import
+    [[nodiscard]] constexpr void* address() const noexcept { return ptr; }
+    [[nodiscard]] static constexpr coroutine_handle from_address(void* addr) {
+        coroutine_handle tmp;
+        tmp.ptr = addr;
+        return tmp;
+    }
+
+    // [coroutine.handle.observers], observers
+    constexpr explicit operator bool() const noexcept { return ptr != nullptr; }
+    bool done() const { return __builtin_coro_done(ptr); }
+
+    // [coroutine.handle.resumption], resumption
+    void operator()() const { resume(); }
+    void resume() const { __builtin_coro_resume(ptr); }
+    void destroy() const { __builtin_coro_destroy(ptr); }
+
+private:
+    void* ptr = nullptr;
+};
+
+template<class Promise> struct coroutine_handle {
+    // [coroutine.handle.con], construct/reset
+    constexpr coroutine_handle() noexcept = default;
+    constexpr coroutine_handle(nullptr_t) noexcept {}
+    coroutine_handle& operator=(nullptr_t) noexcept {
+        ptr = nullptr;
+        return *this;
+    }
+
+    static coroutine_handle from_promise(Promise& p) {
+        using P = remove_cv_t<Promise>;
+        coroutine_handle tmp;
+        tmp.ptr = __builtin_coro_promise(std::addressof(const_cast<P&>(p)), alignof(P), true);
+        return tmp;
+    }
+
+    // [coroutine.handle.export.import], export/import
+    constexpr void* address() const noexcept { return ptr; }
+    static constexpr coroutine_handle from_address(void* addr) {
+        coroutine_handle tmp;
+        tmp.ptr = addr;
+        return tmp;
+    }
+
+    // [coroutine.handle.conv], conversion
+    constexpr operator coroutine_handle<>() const noexcept {
+        return coroutine_handle<>::from_address(ptr);
+    }
+
+    // [coroutine.handle.observers], observers
+    constexpr explicit operator bool() const noexcept { return ptr != nullptr; }
+    bool done() const { return __builtin_coro_done(ptr); }
+
+    // [coroutine.handle.resumption], resumption
+    void operator()() const { resume(); }
+    void resume() const { __builtin_coro_resume(ptr); }
+    void destroy() const { __builtin_coro_destroy(ptr); }
+
+    // [coroutine.handle.promise], promise access
+    Promise& promise() const {
+        return *static_cast<Promise*>(__builtin_coro_promise(ptr, alignof(Promise), false));
+    }
+
+private:
+    void* ptr = nullptr;
+};
+
+// [coroutine.handle.compare], comparison operators
+constexpr bool operator==(coroutine_handle<> x, coroutine_handle<> y) noexcept {
+    return x.address() == y.address();
+}
+constexpr strong_ordering operator<=>(coroutine_handle<> x, coroutine_handle<> y) noexcept {
+    return compare_three_way{}(x.address(), y.address());
+}
+
+// [coroutine.handle.hash], hash support
+template<class T> struct hash;
+template<class P> struct hash<coroutine_handle<P>>;
+
+// [coroutine.noop], no-op coroutines
+struct noop_coroutine_promise {};
+
+template<> struct coroutine_handle<noop_coroutine_promise> {
+    // [coroutine.handle.noop.conv], conversion
+    constexpr operator coroutine_handle<>() const noexcept {
+        return coroutine_handle<>::from_address(ptr);
+    }
+
+    // [coroutine.handle.noop.observers], observers
+    constexpr explicit operator bool() const noexcept { return true; }
+    constexpr bool done() const noexcept { return false; }
+
+    // [coroutine.handle.noop.resumption], resumption
+    constexpr void operator()() const noexcept {}
+    constexpr void resume() const noexcept {}
+    constexpr void destroy() const noexcept {}
+
+    // [coroutine.handle.noop.promise], promise access
+    noop_coroutine_promise& promise() const noexcept {
+        return *static_cast<noop_coroutine_promise*>(
+            __builtin_coro_promise(ptr, alignof(noop_coroutine_promise), false)
+        );
+    }
+
+    // [coroutine.handle.noop.address], address
+    constexpr void* address() const noexcept { return ptr; }
+
+private:
+    explicit coroutine_handle() { ptr = __builtin_coro_noop(); }
+    void* ptr;  // exposition only
+    friend coroutine_handle noop_coroutine() noexcept;
+};
+using noop_coroutine_handle = coroutine_handle<noop_coroutine_promise>;
+
+[[nodiscard]] inline noop_coroutine_handle noop_coroutine() noexcept {
+    return noop_coroutine_handle();
+}
+
+// [coroutine.trivial.awaitables], trivial awaitables
+struct suspend_never {
+    constexpr bool await_ready() const noexcept { return true; }
+    constexpr void await_suspend(coroutine_handle<>) const noexcept {}
+    constexpr void await_resume() const noexcept {}
+};
+struct suspend_always {
+    constexpr bool await_ready() const noexcept { return false; }
+    constexpr void await_suspend(coroutine_handle<>) const noexcept {}
+    constexpr void await_resume() const noexcept {}
+};
+
+}  // namespace std

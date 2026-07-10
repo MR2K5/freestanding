@@ -1,0 +1,37 @@
+#pragma once
+#include <cstddef>
+
+namespace std {
+template<class _E> class initializer_list {
+public:
+    using value_type      = _E;
+    using reference       = const _E&;
+    using const_reference = const _E&;
+    using size_type       = size_t;
+    using iterator        = const _E*;
+    using const_iterator  = const _E*;
+
+private:
+    iterator _M_array;
+    size_type _M_len;
+
+    constexpr initializer_list(iterator __a, size_type __l) noexcept: _M_array(__a), _M_len(__l) {}
+
+public:
+    constexpr initializer_list() noexcept: _M_array(nullptr), _M_len(0) {}
+
+    constexpr size_type size() const noexcept { return _M_len; }
+    constexpr iterator begin() const noexcept { return _M_array; }
+    constexpr iterator end() const noexcept { return _M_array + _M_len; }
+};
+
+// Custom non-member begin/end overloads to support range-based for loops
+template<class _E> constexpr const _E* begin(initializer_list<_E> __ils) noexcept {
+    return __ils.begin();
+}
+
+template<class _E> constexpr const _E* end(initializer_list<_E> __ils) noexcept {
+    return __ils.end();
+}
+
+}  // namespace std

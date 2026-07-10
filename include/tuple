@@ -1,0 +1,475 @@
+#pragma once
+
+#include "compare"
+#include "concepts"
+#include <cstddef>
+#include <type_traits>
+#include <utility>
+
+namespace std {
+
+template<class... Ts> inline constexpr bool __enable_tuple_like<tuple<Ts...>> = true;
+
+template<size_t I, class T> struct __tuple_leaf {
+    T obj_;
+    static constexpr size_t idx = I;
+    using type                  = T;
+
+    template<class... As> constexpr __tuple_leaf(As&&... as): obj_(FWD(as)...) {}
+};
+
+template<class T>
+concept __copy_list_initializable = requires {
+    [](T const&) {
+    }({});
+};
+
+template<class Is, class... Ts> struct __tuple;
+template<size_t... Is, class... Ts>
+struct __tuple<index_sequence<Is...>, Ts...>: __tuple_leaf<Is, Ts>... {
+    template<class... Us> static consteval bool disambiguation_constraint() {
+        if constexpr (sizeof...(Ts) == 1) {
+            return !is_same_v<remove_cvref_t<Us...[0]>, tuple<Ts...>>;
+        } else if constexpr (sizeof...(Ts) == 2 || sizeof...(Ts) == 3) {
+            return !is_same_v<remove_cvref_t<Us...[0]>, allocator_arg_t>
+                || is_same_v<remove_cvref_t<Ts...[0]>, allocator_arg_t>;
+        } else {
+            return true;
+        }
+    }
+
+    constexpr explicit((!__copy_list_initializable<Ts> || ...)) __tuple()
+        requires(is_default_constructible_v<Ts> && ...) = default;
+
+    constexpr explicit((!is_convertible_v<Ts const&, Ts> || ...)) __tuple(Ts const&... ts) noexcept(
+        (is_nothrow_copy_constructible_v<Ts> && ...)
+    ) requires(sizeof...(Ts) >= 1) && (is_copy_constructible_v<Ts> && ...)
+        : __tuple_leaf<Is, Ts>(ts)... {}
+
+    template<class... UTypes>
+    constexpr explicit((!is_convertible_v<UTypes, Ts> || ...)) __tuple(UTypes&&... u) noexcept(
+        (is_nothrow_constructible_v<Ts, UTypes> && ...)
+    ) requires(sizeof...(Ts) == sizeof...(UTypes)) && (sizeof...(Ts) >= 1)
+           && (disambiguation_constraint<UTypes...>())
+        : __tuple_leaf<Is, Ts>(FWD(u))... {}
+
+    template<class... UTypes>
+    __tuple(UTypes&&... u) requires(sizeof...(Ts) == sizeof...(UTypes)) && (sizeof...(Ts) >= 1)
+                                    && (disambiguation_constraint<UTypes...>())
+                                    && (reference_constructs_from_temporary_v<Ts, UTypes &&> || ...)
+    = delete;
+
+    constexpr __tuple(__tuple const&) requires(is_copy_constructible_v<Ts> && ...) = default;
+    constexpr __tuple(__tuple&&) requires(is_move_constructible_v<Ts> && ...)      = default;
+
+    template<class... Us> struct __first {
+        using type = void;
+    };
+    template<class U, class... Us> struct __first<U, Us...> {
+        using type = U;
+    };
+    template<class... Us> struct __second {
+        using type = void;
+    };
+    template<class U, class U2, class... Us> struct __second<U, U2, Us...> {
+        using type = U;
+    };
+    template<class... Us> using __first_t = __first<Us...>::type;
+    template<class... Us> using __second_t = __second<Us...>::type;
+
+#define _DECL_CTOR(qual)                                                                           \
+    template<class... Us>                                                                          \
+    explicit(                                                                                      \
+        (!is_convertible_v<decltype(get<Is>(declval<tuple<Us...> qual>())), Ts> || ...)            \
+    ) constexpr __tuple(tuple<Us...> qual u)                                                       \
+        requires(sizeof...(Ts) == sizeof...(Us))                                                   \
+             && (is_constructible_v<Ts, decltype(get<Is>(FWD(u)))> && ...)                         \
+             && (sizeof...(Us) != 1                                                                \
+                 || (!is_convertible_v<decltype(u), Ts...[0]>                                      \
+                     && !is_constructible_v<__first_t<Ts...>, decltype(u)>                         \
+                     && !is_same_v<__first_t<Ts...>, __first_t<Us...>>))                           \
+        : __tuple_leaf<Is, Ts>(get<Is>(FWD(u)))... {}                                              \
+                                                                                                   \
+    template<class... Us>                                                                          \
+    __tuple(tuple<Us...> qual u)                                                                   \
+        requires(sizeof...(Ts) == sizeof...(Us))                                                   \
+                 && (is_constructible_v<Ts, decltype(get<Is>(FWD(u)))> && ...)                     \
+                 && (sizeof...(Us) != 1                                                            \
+                     || (!is_convertible_v<decltype(u), __first_t<Ts...>>                          \
+                         && !is_constructible_v<__first_t<Ts...>, decltype(u)>                     \
+                         && !is_same_v<__first_t<Ts...>, __first_t<Us...>>))                       \
+                 && (reference_constructs_from_temporary_v<Ts, decltype(get<Is>(FWD(u)))> || ...)  \
+        = delete;
+
+    _DECL_CTOR(&)
+    _DECL_CTOR(&&)
+    _DECL_CTOR(const&)
+    _DECL_CTOR(const&&)
+#undef _DECL_CTOR
+
+#define _DECL_CTOR(qual)                                                                           \
+    template<class U1, class U2>                                                                   \
+    constexpr explicit(                                                                            \
+        !is_convertible_v<decltype(get<0>(declval<pair<U1, U2> qual>())), __first_t<Ts...>>        \
+        || !is_convertible_v<decltype(get<1>(declval<pair<U1, U2> qual>())), __second_t<Ts...>>    \
+    ) __tuple(pair<U1, U2> qual u)                                                                 \
+        requires(sizeof...(Ts) == 2)                                                               \
+                 && is_constructible_v<__first_t<Ts...>, decltype(get<0>(FWD(u)))>                 \
+                 && is_constructible_v<__second_t<Ts...>, decltype(get<1>(FWD(u)))>                \
+        : __tuple_leaf<0, __first_t<Ts...>>(get<0>(FWD(u))),                                       \
+          __tuple_leaf<1, __second_t<Ts...>>(get<1>(FWD(u))) {}                                    \
+                                                                                                   \
+    template<class U1, class U2>                                                                   \
+    __tuple(pair<U1, U2> qual u)                                                                   \
+        requires(sizeof...(Ts) == 2)                                                               \
+                 && is_constructible_v<__first_t<Ts...>, decltype(get<0>(FWD(u)))>                 \
+                 && is_constructible_v<__second_t<Ts...>, decltype(get<1>(FWD(u)))>                \
+                 && (reference_constructs_from_temporary_v<                                        \
+                         __first_t<Ts...>, decltype(get<0>(FWD(u)))>                               \
+                     || reference_constructs_from_temporary_v<                                     \
+                         __second_t<Ts...>, decltype(get<1>(FWD(u)))>) = delete;
+
+    _DECL_CTOR(&)
+    _DECL_CTOR(&&)
+    _DECL_CTOR(const&)
+    _DECL_CTOR(const&&)
+#undef _DECL_CTOR
+
+    template<__tuple_like Tp>
+    constexpr explicit((!is_convertible_v<decltype(get<Is>(declval<Tp>())), Ts> || ...)) __tuple(
+        Tp&& u
+    ) requires __different_from<Tp, tuple<Ts...>> && (!__is_subrange_v<remove_cvref_t<Tp>>)
+            && (sizeof...(Ts) == tuple_size_v<remove_cvref_t<Tp>>)
+            && (is_constructible_v<Ts, decltype(get<Is>(FWD(u)))> && ...)
+            && (sizeof...(Ts) != 1
+                || (!is_convertible_v<Tp, Ts...[0]> && !is_constructible_v<Ts...[0], Tp>))
+        : __tuple_leaf<Is, Ts>(get<Is>(FWD(u)))... {}
+
+    template<__tuple_like Tp>
+    __tuple(Tp&& u)
+        requires(reference_constructs_from_temporary_v<Ts, decltype(get<Is>(FWD(u)))> || ...)
+        = delete;
+
+    constexpr tuple<Ts...> const& operator=(tuple<Ts...> const& u) const
+        requires(is_copy_assignable_v<Ts const> && ...) {
+        ((get<Is>(*this) = get<Is>(u), void()), ...);
+        return static_cast<tuple<Ts...> const&>(*this);
+    }
+
+    constexpr tuple<Ts...> const& operator=(tuple<Ts...>&& u) const
+        requires(is_assignable_v<Ts const&, Ts> && ...) {
+        ((get<Is>(*this) = std::forward<Ts>(get<Is>(u)), void()), ...);
+        return static_cast<tuple<Ts...> const&>(*this);
+    }
+
+    template<class... Us>
+    constexpr tuple<Ts...>& operator=(tuple<Us...> const& u)
+        requires(sizeof...(Ts) == sizeof...(Us)) && (is_assignable_v<Ts&, Us const&> && ...) {
+        ((get<Is>(*this) = get<Is>(u), void()), ...);
+        return static_cast<tuple<Ts...>&>(*this);
+    }
+
+    template<class... Us>
+    constexpr tuple<Ts...> const& operator=(tuple<Us...> const& u) const
+        requires(sizeof...(Ts) == sizeof...(Us)) && (is_assignable_v<Ts const&, Us const&> && ...) {
+        ((get<Is>(*this) = get<Is>(u), void()), ...);
+        return static_cast<tuple<Ts...>&>(*this);
+    }
+
+    // 7 & 8. Converting Move Assignment from different tuple
+    template<class... Us>
+    constexpr tuple<Ts...>& operator=(tuple<Us...>&& u)
+        requires(sizeof...(Ts) == sizeof...(Us)) && (is_assignable_v<Ts&, Us> && ...) {
+        ((get<Is>(*this) = FWD(get<Is>(u)), void()), ...);
+        return static_cast<tuple<Ts...>&>(*this);
+    }
+
+    template<class... Us>
+    constexpr tuple<Ts...> const& operator=(tuple<Us...>&& u) const
+        requires(sizeof...(Ts) == sizeof...(Us)) && (is_assignable_v<Ts const&, Us> && ...) {
+        ((get<Is>(*this) = FWD(get<Is>(u)), void()), ...);
+        return static_cast<tuple<Ts...> const&>(*this);
+    }
+
+    // 9 & 10. Copy Assignment from std::pair
+    template<class U1, class U2>
+    constexpr tuple<Ts...>& operator=(pair<U1, U2> const& u)
+        requires(sizeof...(Ts) == 2)
+             && is_assignable_v<Ts...[0]&, const U1&> && is_assignable_v<Ts...[1]&, const U2&> {
+        get<0>(*this) = u.first;
+        get<1>(*this) = u.second;
+        return static_cast<tuple<Ts...>&>(*this);
+    }
+
+    template<class U1, class U2>
+    constexpr tuple<Ts...> const& operator=(pair<U1, U2> const& u) const
+        requires(sizeof...(Ts) == 2) && is_assignable_v<Ts...[0] const&, const U1&>
+             && is_assignable_v<Ts...[1] const&, const U2&> {
+        get<0>(*this) = u.first;
+        get<1>(*this) = u.second;
+        return static_cast<tuple<Ts...> const&>(*this);
+    }
+
+    // 11 & 12. Move Assignment from std::pair
+    template<class U1, class U2>
+    constexpr tuple<Ts...>& operator=(pair<U1, U2>&& u)
+        requires(sizeof...(Ts) == 2)
+             && is_assignable_v<Ts...[0]&, U1> && is_assignable_v<Ts...[1]&, U2> {
+        get<0>(*this) = FWD(u.first);
+        get<1>(*this) = FWD(u.second);
+        return static_cast<tuple<Ts...>&>(*this);
+    }
+
+    template<class U1, class U2>
+    constexpr tuple<Ts...> const& operator=(pair<U1, U2>&& u) const
+        requires(sizeof...(Ts) == 2)
+             && is_assignable_v<Ts...[0] const&, U1> && is_assignable_v<Ts...[1] const&, U2> {
+        get<0>(*this) = FWD(u.first);
+        get<1>(*this) = FWD(u.second);
+        return static_cast<tuple<Ts...> const&>(*this);
+    }
+
+    // 13 & 14. Universal Tuple-Like Assignment
+    template<__tuple_like UTuple>
+    constexpr tuple<Ts...>& operator=(UTuple&& u)
+        requires __different_from<UTuple, tuple<Ts...>>
+              && (!__is_subrange_v<remove_cvref_t<UTuple>>)
+              && (sizeof...(Ts) == tuple_size_v<remove_cvref_t<UTuple>>)
+              && (is_assignable_v<Ts&, decltype(get<Is>(declval<UTuple>()))> && ...) {
+        ((get<Is>(*this) = get<Is>(FWD(u)), void()), ...);
+        return static_cast<tuple<Ts...>&>(*this);
+    }
+
+    template<__tuple_like UTuple>
+    constexpr tuple<Ts...> const& operator=(UTuple&& u) const
+        requires __different_from<UTuple, tuple<Ts...>>
+              && (!__is_subrange_v<remove_cvref_t<UTuple>>)
+              && (sizeof...(Ts) == tuple_size_v<remove_cvref_t<UTuple>>)
+              && (is_assignable_v<Ts const&, decltype(get<Is>(declval<UTuple>()))> && ...) {
+        ((get<Is>(*this) = get<Is>(FWD(u)), void()), ...);
+        return static_cast<tuple<Ts...> const&>(*this);
+    }
+
+    constexpr void swap(tuple<Ts...>& o) noexcept((is_nothrow_swappable_v<Ts> && ...))
+        requires(is_swappable_v<Ts> && ...) {
+        using std::swap;
+        (swap(get<Is>(*this), get<Is>(o)), ...);
+    }
+    constexpr void
+    swap(tuple<Ts...> const& o) const noexcept((is_nothrow_swappable_v<Ts const> && ...))
+        requires(is_swappable_v<Ts const> && ...) {
+        using std::swap;
+        (swap(get<Is>(*this), get<Is>(o)), ...);
+    }
+};
+
+template<class... Ts> struct tuple: private __tuple<index_sequence_for<Ts...>, Ts...> {
+    using Base = __tuple<index_sequence_for<Ts...>, Ts...>;
+    using Base::Base;
+    using Base::operator=;
+    using Base::swap;
+
+    constexpr tuple& operator=(tuple const&) requires(is_copy_assignable_v<Ts> && ...) = default;
+    constexpr tuple& operator=(tuple&&) noexcept((is_nothrow_move_assignable_v<Ts> && ...))
+        requires(is_move_assignable_v<Ts> && ...) = default;
+};
+
+template<class... Us> tuple(Us...) -> tuple<Us...>;
+template<class T1, class T2> tuple(pair<T1, T2>) -> tuple<T1, T2>;
+template<class Alloc, class... UTypes> tuple(allocator_arg_t, Alloc, UTypes...) -> tuple<UTypes...>;
+template<class Alloc, class T1, class T2>
+tuple(allocator_arg_t, Alloc, pair<T1, T2>) -> tuple<T1, T2>;
+template<class Alloc, class... UTypes>
+tuple(allocator_arg_t, Alloc, tuple<UTypes...>) -> tuple<UTypes...>;
+
+template<size_t I, class... Ts>
+constexpr Ts...[I]& get(tuple<Ts...>& t) noexcept {
+    return ((__tuple_leaf<I, Ts...[I]>*)(&t))->obj_;
+}
+template<size_t I, class... Ts>
+constexpr Ts...[I] const& get(tuple<Ts...> const& t) noexcept {
+    return ((__tuple_leaf<I, Ts...[I]> const*)(&t))->obj_;
+}
+template<size_t I, class... Ts>
+constexpr Ts...[I]&& get(tuple<Ts...>&& t) noexcept {
+    return static_cast<Ts...[I]&&>(((__tuple_leaf<I, Ts...[I]>*)(&t))->obj_);
+}
+template<size_t I, class... Ts> constexpr Ts...[I] const&& get(tuple<Ts...> const&& t) noexcept {
+    return static_cast<Ts...[I]&&>(((__tuple_leaf<I, Ts...[I]> const*)(&t))->obj_);
+}
+
+// FOR __tuple
+template<size_t I, class Is, class... Ts>
+constexpr Ts...[I]& get(__tuple<Is, Ts...>& t) noexcept {
+    return ((__tuple_leaf<I, Ts...[I]>*)(&t))->obj_;
+}
+template<size_t I, class Is, class... Ts>
+constexpr Ts...[I] const& get(__tuple<Is,Ts...> const& t) noexcept {
+    return ((__tuple_leaf<I, Ts...[I]> const*)(&t))->obj_;
+}
+template<size_t I, class Is, class... Ts>
+constexpr Ts...[I]&& get(__tuple<Is,Ts...>&& t) noexcept {
+    return static_cast<Ts...[I]&&>(((__tuple_leaf<I, Ts...[I]>*)(&t))->obj_);
+}
+template<size_t I, class Is, class... Ts>
+constexpr Ts...[I] const&& get(__tuple<Is, Ts...> const&& t) noexcept {
+    return static_cast<Ts...[I]&&>(((__tuple_leaf<I, Ts...[I]> const*)(&t))->obj_);
+}
+
+template<class... Us> constexpr tuple<unwrap_ref_decay_t<Us>...> make_tuple(Us&&... us) {
+    return tuple<unwrap_ref_decay_t<Us>...>(FWD(us)...);
+}
+
+template<class... Us> constexpr tuple<Us&&...> forward_as_tuple(Us&&... us) noexcept {
+    return tuple<Us&&...>(FWD(us)...);
+}
+
+template<class... Us> constexpr tuple<Us&...> tie(Us&... ts) noexcept {
+    return tuple<Us&...>(ts...);
+}
+
+template<class... Ts> struct tuple_size<tuple<Ts...>>: integral_constant<size_t, sizeof...(Ts)> {};
+template<size_t I, class... Ts> struct tuple_element<I, tuple<Ts...>> {
+    using type = Ts...[I];
+};
+
+// TODO tuple_cat
+
+template<class... Ts>
+constexpr void swap(tuple<Ts...>& x, tuple<Ts...>& y) noexcept(noexcept(x.swap(y)))
+    requires(is_swappable_v<Ts> && ...) {
+    x.swap(y);
+}
+template<class... Ts>
+constexpr void swap(tuple<Ts...> const& x, tuple<Ts...> const& y) noexcept(noexcept(x.swap(y)))
+    requires(is_swappable_v<Ts const> && ...) {
+    x.swap(y);
+}
+
+template<class F, class Tp, size_t... Is> consteval bool __tuple_apply_nt(index_sequence<Is...>) {
+    return is_nothrow_invocable_v<F, decltype(get<Is>(declval<Tp>()))...>;
+}
+
+template<class F, __tuple_like Tuple>
+constexpr decltype(auto) apply(F&& f, Tuple&& t) noexcept(
+    __tuple_apply_nt<F, Tuple>(make_index_sequence<tuple_size_v<remove_cvref_t<Tuple>>>{})
+) requires is_invocable_v<F, class As> {
+    auto&& [... ts] = FWD(t);
+    return std::invoke(FWD(f), FWD(ts)...);
+}
+
+template<class T, __tuple_like Tpl> constexpr T make_from_tuple(Tpl&& tpl) {
+    static_assert(
+        tuple_size_v<remove_cvref_t<Tpl>> != 1
+        || !reference_constructs_from_temporary_v<T, decltype(get<0>(FWD(tpl)))>
+    );
+    auto&& [... elems] = FWD(tpl);
+    return T(FWD(elems)...);
+}
+
+template<class T, class U> consteval bool __tuple_has_equal() {
+    return decltype([](T const& x, U const& y) {
+        auto& [... ts] = x;
+        auto& [... us] = y;
+        return bool_constant<(requires {
+            { ts == us } -> boolean_testable;
+        } && ...)>();
+    }(declval<T const&>(), declval<U const&>()))::value;
+}
+
+template<class... TTypes, class... UTypes>
+constexpr bool operator==(tuple<TTypes...> const& t, tuple<UTypes...> const& u)
+    requires(sizeof...(TTypes) == sizeof...(UTypes))
+         && (__tuple_has_equal<tuple<TTypes...>, tuple<UTypes...>>()) {
+    auto& [... ts] = t;
+    auto& [... us] = u;
+    return ((ts == us) && ...);
+}
+
+template<class... TTypes, __tuple_like U>
+requires(!__is_specialization_of_v<tuple, remove_cvref_t<U>>)
+constexpr bool operator==(tuple<TTypes...> const& t, U const& u)
+    requires(sizeof...(TTypes) == tuple_size_v<remove_cvref_t<U>>)
+         && (__tuple_has_equal<tuple<TTypes...>, U>()) {
+    auto& [... ts] = t;
+    auto& [... us] = u;
+    return ((ts == us) && ...);
+}
+
+template<class... TTypes, class... UTypes>
+constexpr common_comparison_category_t<__synth_three_way_result<TTypes, UTypes>...>
+operator<=>(tuple<TTypes...> const& t, tuple<UTypes...> const& u) {
+    auto& [... ts] = t;
+    auto& [... us] = u;
+
+    auto impl = [&]<size_t I = 0>(this auto&& self) {
+        if constexpr (I == sizeof...(ts)) {
+            return strong_ordering::equal;
+        } else {
+            if (auto c = __synth_three_way(ts...[I], us...[I]); c != 0) return c;
+            return self.template operator()<I + 1>();
+        }
+    };
+    return impl();
+}
+
+template<class U, class... Ts> consteval auto __tuple_three_way_return() {
+    return decltype([](U const& u) {
+        auto& [... us] = u;
+        static_assert(is_void_v<decltype(us)...>);
+        static_assert(sizeof...(us) == sizeof...(Ts));
+        return common_comparison_category_t<__synth_three_way_result<Ts, decltype(us)>...>::less;
+    }(declval<U const&>()))::less;
+}
+
+template<class... TTypes, __tuple_like U>
+requires(!__is_specialization_of_v<tuple, remove_cvref_t<U>>)
+constexpr decltype(__tuple_three_way_return<U, TTypes...>())
+operator<=>(tuple<TTypes...> const& t, U const& u) {
+    auto& [... ts] = t;
+    auto& [... us] = u;
+
+    auto impl = [&]<size_t I = 0>(this auto&& self) {
+        if constexpr (I == sizeof...(ts)) {
+            return strong_ordering::equal;
+        } else {
+            if (auto c = __synth_three_way(ts...[I], us...[I]); c != 0) return c;
+            return self.template operator()<I + 1>();
+        }
+    };
+    return impl();
+}
+
+template<template<class> class TQual, template<class> class UQual, class TT, class UU, class Is>
+struct __tuple_common_ref;
+template<template<class> class TQual, template<class> class UQual, class TT, class UU, size_t... Is>
+struct __tuple_common_ref<TQual, UQual, TT, UU, index_sequence<Is...>> {
+    using type = tuple<
+        common_reference_t<TQual<tuple_element_t<Is, TT>>, UQual<tuple_element_t<Is, UU>>>...>;
+};
+
+template<
+    __tuple_like TTuple, __tuple_like UTuple, template<class> class TQual,
+    template<class> class UQual>
+requires(__is_specialization_of_v<tuple, TTuple> || __is_specialization_of_v<tuple, UTuple>)
+     && is_same_v<TTuple, decay_t<TTuple>> && is_same_v<UTuple, decay_t<UTuple>>
+     && (tuple_size_v<TTuple> == tuple_size_v<UTuple>) && requires {
+            typename __tuple_common_ref<
+                TQual, UQual, TTuple, UTuple, make_index_sequence<tuple_size_v<TTuple>>>::type;
+        } struct basic_common_reference<TTuple, UTuple, TQual, UQual>
+    : __tuple_common_ref<TQual, UQual, TTuple, UTuple, make_index_sequence<tuple_size_v<TTuple>>> {
+};
+
+template<class TT, class UU, class Is> struct __tuple_common_type;
+template<class TT, class UU, size_t... Is>
+struct __tuple_common_type<TT, UU, index_sequence<Is...>> {
+    using type = tuple<common_type_t<tuple_element_t<Is, TT>, tuple_element_t<Is, UU>>...>;
+};
+
+template<__tuple_like T, __tuple_like U>
+requires(__is_specialization_of_v<tuple, T> || __is_specialization_of_v<tuple, U>)
+     && is_same_v<T, decay_t<T>> && is_same_v<U, decay_t<U>> && (tuple_size_v<T> == tuple_size_v<U>)
+     && requires { typename __tuple_common_type<T, U, make_index_sequence<tuple_size_v<T>>>::type; }
+struct common_type<T, U>: __tuple_common_type<T, U, make_index_sequence<tuple_size_v<T>>> {};
+
+}  // namespace std

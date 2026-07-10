@@ -1,0 +1,327 @@
+#pragma once
+
+#include <concepts>
+#include <type_traits>
+
+namespace std {
+
+struct _CmpUnspecifiedParam {
+    // If anything other than a literal 0 is provided, the behavior is undefined by the Standard.
+    //
+    // The alternative to the `__enable_if__` attribute would be to use the fact that a pointer
+    // can be constructed from literal 0, but this conflicts with `-Wzero-as-null-pointer-constant`.
+    template<class T> requires(__is_same(T, int))
+    consteval _CmpUnspecifiedParam(T z) noexcept __attribute__((__enable_if__(z == 0, ""))) {}
+};
+struct _CmpCtor {};
+
+class partial_ordering {
+public:
+    static partial_ordering const less;
+    static partial_ordering const greater;
+    static partial_ordering const equivalent;
+    static partial_ordering const unordered;
+
+    friend constexpr bool operator==(partial_ordering, partial_ordering) = default;
+    friend constexpr bool operator==(partial_ordering x, _CmpUnspecifiedParam) noexcept {
+        return x == equivalent;
+    }
+
+    friend constexpr bool operator<(partial_ordering v, _CmpUnspecifiedParam) noexcept {
+        return v == less;
+    }
+    friend constexpr bool operator<(_CmpUnspecifiedParam, partial_ordering v) noexcept {
+        return v == greater;
+    }
+    friend constexpr bool operator>(partial_ordering v, _CmpUnspecifiedParam) noexcept {
+        return v == greater;
+    }
+    friend constexpr bool operator>(_CmpUnspecifiedParam, partial_ordering v) noexcept {
+        return v == less;
+    }
+    friend constexpr bool operator<=(partial_ordering v, _CmpUnspecifiedParam) noexcept {
+        return v == less || v == equivalent;
+    }
+    friend constexpr bool operator<=(_CmpUnspecifiedParam, partial_ordering v) noexcept {
+        return v == greater || v == equivalent;
+    }
+    friend constexpr bool operator>=(partial_ordering v, _CmpUnspecifiedParam) noexcept {
+        return v == greater || v == equivalent;
+    }
+    friend constexpr bool operator>=(_CmpUnspecifiedParam, partial_ordering v) noexcept {
+        return v == less || v == equivalent;
+    }
+    friend constexpr partial_ordering
+    operator<=>(partial_ordering v, _CmpUnspecifiedParam) noexcept {
+        return v;
+    }
+    friend constexpr partial_ordering
+    operator<=>(_CmpUnspecifiedParam, partial_ordering v) noexcept {
+        return v == greater ? less : v == less ? greater : v;
+    }
+
+    constexpr partial_ordering(_CmpCtor, signed char v): val(v) {}
+
+private:
+    signed char val;
+};
+
+inline constexpr partial_ordering partial_ordering::less{_CmpCtor{}, -1};
+inline constexpr partial_ordering partial_ordering::equivalent{_CmpCtor{}, 0};
+inline constexpr partial_ordering partial_ordering::greater{_CmpCtor{}, 1};
+inline constexpr partial_ordering partial_ordering::unordered{_CmpCtor{}, -127};
+
+class weak_ordering {
+public:
+    constexpr weak_ordering(_CmpCtor, signed char v): val(v) {}
+
+    static weak_ordering const less;
+    static weak_ordering const greater;
+    static weak_ordering const equivalent;
+
+    constexpr operator partial_ordering() const noexcept {
+        return *this == less    ? partial_ordering::less
+             : *this == greater ? partial_ordering::greater
+                                : partial_ordering::equivalent;
+    }
+
+    friend constexpr bool operator==(weak_ordering, weak_ordering) noexcept = default;
+    friend constexpr bool operator==(weak_ordering v, _CmpUnspecifiedParam) noexcept {
+        return v == equivalent;
+    }
+
+    friend constexpr bool operator<(weak_ordering v, _CmpUnspecifiedParam) noexcept {
+        return v == less;
+    }
+    friend constexpr bool operator<(_CmpUnspecifiedParam, weak_ordering v) noexcept {
+        return v == greater;
+    }
+    friend constexpr bool operator>(weak_ordering v, _CmpUnspecifiedParam) noexcept {
+        return v == greater;
+    }
+    friend constexpr bool operator>(_CmpUnspecifiedParam, weak_ordering v) noexcept {
+        return v == less;
+    }
+    friend constexpr bool operator<=(weak_ordering v, _CmpUnspecifiedParam) noexcept {
+        return v == less || v == equivalent;
+    }
+    friend constexpr bool operator<=(_CmpUnspecifiedParam, weak_ordering v) noexcept {
+        return v == greater || v == equivalent;
+    }
+    friend constexpr bool operator>=(weak_ordering v, _CmpUnspecifiedParam) noexcept {
+        return v == greater || v == equivalent;
+    }
+    friend constexpr bool operator>=(_CmpUnspecifiedParam, weak_ordering v) noexcept {
+        return v == less || v == equivalent;
+    }
+    friend constexpr weak_ordering operator<=>(weak_ordering v, _CmpUnspecifiedParam) noexcept {
+        return v;
+    }
+    friend constexpr weak_ordering operator<=>(_CmpUnspecifiedParam, weak_ordering v) noexcept {
+        return v == greater ? less : v == less ? greater : v;
+    }
+
+private:
+    signed char val;
+};
+
+inline constexpr weak_ordering weak_ordering::less{_CmpCtor{}, -1};
+inline constexpr weak_ordering weak_ordering::equivalent{_CmpCtor{}, 0};
+inline constexpr weak_ordering weak_ordering::greater{_CmpCtor{}, 1};
+
+class strong_ordering {
+public:
+    constexpr strong_ordering(_CmpCtor, signed char v): val(v) {}
+
+    static strong_ordering const less;
+    static strong_ordering const greater;
+    static strong_ordering const equivalent;
+    static strong_ordering const equal;
+
+    constexpr operator partial_ordering() const noexcept {
+        return *this == less    ? partial_ordering::less
+             : *this == greater ? partial_ordering::greater
+                                : partial_ordering::equivalent;
+    }
+    constexpr operator weak_ordering() const noexcept {
+        return *this == less    ? weak_ordering::less
+             : *this == greater ? weak_ordering::greater
+                                : weak_ordering::equivalent;
+    }
+
+    friend constexpr bool operator==(strong_ordering, strong_ordering) noexcept = default;
+    friend constexpr bool operator==(strong_ordering v, _CmpUnspecifiedParam) noexcept {
+        return v == equivalent;
+    }
+
+    friend constexpr bool operator<(strong_ordering v, _CmpUnspecifiedParam) noexcept {
+        return v == less;
+    }
+    friend constexpr bool operator<(_CmpUnspecifiedParam, strong_ordering v) noexcept {
+        return v == greater;
+    }
+    friend constexpr bool operator>(strong_ordering v, _CmpUnspecifiedParam) noexcept {
+        return v == greater;
+    }
+    friend constexpr bool operator>(_CmpUnspecifiedParam, strong_ordering v) noexcept {
+        return v == less;
+    }
+    friend constexpr bool operator<=(strong_ordering v, _CmpUnspecifiedParam) noexcept {
+        return v == less || v == equivalent;
+    }
+    friend constexpr bool operator<=(_CmpUnspecifiedParam, strong_ordering v) noexcept {
+        return v == greater || v == equivalent;
+    }
+    friend constexpr bool operator>=(strong_ordering v, _CmpUnspecifiedParam) noexcept {
+        return v == greater || v == equivalent;
+    }
+    friend constexpr bool operator>=(_CmpUnspecifiedParam, strong_ordering v) noexcept {
+        return v == less || v == equivalent;
+    }
+    friend constexpr strong_ordering operator<=>(strong_ordering v, _CmpUnspecifiedParam) noexcept {
+        return v;
+    }
+    friend constexpr strong_ordering operator<=>(_CmpUnspecifiedParam, strong_ordering v) noexcept {
+        return v == greater ? less : v == less ? greater : v;
+    }
+
+private:
+    signed char val;
+};
+
+inline constexpr strong_ordering strong_ordering::less{_CmpCtor{}, -1};
+inline constexpr strong_ordering strong_ordering::equivalent{_CmpCtor{}, 0};
+inline constexpr strong_ordering strong_ordering::equal{_CmpCtor{}, 0};
+inline constexpr strong_ordering strong_ordering::greater{_CmpCtor{}, 1};
+
+namespace detail {
+template<unsigned int> struct common_cmpcat_base {
+    using type = void;
+};
+template<> struct common_cmpcat_base<0u> {
+    using type = strong_ordering;
+};
+template<> struct common_cmpcat_base<2u> {
+    using type = partial_ordering;
+};
+template<> struct common_cmpcat_base<4u> {
+    using type = weak_ordering;
+};
+template<> struct common_cmpcat_base<6u> {
+    using type = partial_ordering;
+};
+}  // namespace detail
+
+template<class... Ts>
+struct common_comparison_category: detail::common_cmpcat_base<
+                                       (0u | ...
+                                        | (is_same_v<Ts, strong_ordering>    ? 0u
+                                           : is_same_v<Ts, weak_ordering>    ? 4u
+                                           : is_same_v<Ts, partial_ordering> ? 2u
+                                                                             : 1u))> {};
+
+template<class... Ts> using common_comparison_category_t = common_comparison_category<Ts...>::type;
+
+template<class T, class U = T> struct compare_three_way_result {};
+
+template<class T, class U>
+requires requires(remove_reference_t<T> const& t, remove_reference_t<U> const& u) { t <=> u; }
+struct compare_three_way_result<T, U> {
+    using type =
+        decltype(declval<remove_reference_t<T> const&>(), declval<remove_reference_t<U> const&()>);
+};
+
+template<class T, class U = T>
+using compare_three_way_result_t = compare_three_way_result<T, U>::type;
+
+namespace detail {
+
+template<class T, class Cat>
+concept __compare_as = same_as<common_comparison_category_t<T, Cat>, Cat>;
+}
+
+template<class T, class Cat = partial_ordering>
+concept three_way_comparable =
+    detail::__weakly_equality_comparable_with<T, T> && detail::__partially_ordered_with<T, T>
+    && requires(remove_reference_t<T> const& a, remove_reference_t<T> const& b) {
+           { a <=> b } -> detail::__compare_as<Cat>;
+       };
+
+template<class T, class U, class Cat = std::partial_ordering>
+concept three_way_comparable_with =
+    three_way_comparable<T, Cat> && three_way_comparable<U, Cat>
+    && detail::__comparison_common_type_with<T, U>
+    && three_way_comparable<
+        common_reference_t<remove_reference_t<T> const&, remove_reference_t<U> const&>, Cat>
+    && detail::__weakly_equality_comparable_with<T, U> && detail::__partially_ordered_with<T, U>
+    && requires(remove_reference_t<T> const& t, remove_reference_t<U> const& u) {
+           { t <=> u } -> detail::__compare_as<Cat>;
+           { u <=> t } -> detail::__compare_as<Cat>;
+       };
+
+struct compare_three_way {
+    using is_transparent = void;
+    template<class T, class U>
+    static constexpr auto operator()(T&& t, U&& u) requires three_way_comparable_with<T, U> {
+        return FWD(t) <=> FWD(u);
+    }
+};
+
+constexpr bool is_eq(std::partial_ordering cmp) noexcept {
+    return cmp == 0;
+}
+constexpr bool is_neq(std::partial_ordering cmp) noexcept {
+    return cmp != 0;
+}
+constexpr bool is_lt(std::partial_ordering cmp) noexcept {
+    return cmp < 0;
+}
+constexpr bool is_lteq(std::partial_ordering cmp) noexcept {
+    return cmp <= 0;
+}
+constexpr bool is_gt(std::partial_ordering cmp) noexcept {
+    return cmp > 0;
+}
+constexpr bool is_gteq(std::partial_ordering cmp) noexcept {
+    return cmp >= 0;
+}
+
+constexpr auto __synth_three_way = []<class T, class U>(T const& t, U const& u) requires requires {
+    { t < u } -> boolean_testable;
+    { u < t } -> boolean_testable;
+} {
+    if constexpr (three_way_comparable_with<T, U>)
+        return t <=> u;
+    else {
+        if (t < u) return weak_ordering::less;
+        if (u < t) return weak_ordering::greater;
+        return weak_ordering::equivalent;
+    }
+};
+template<class T, class U = T>
+using __synth_three_way_result = decltype(__synth_three_way(declval<T&>(), declval<U&>()));
+
+template<class I1, class I2, class Cmp>
+constexpr auto lexicographical_compare_three_way(I1 f1, I1 l1, I2 f2, I2 l2, Cmp comp)
+    -> decltype(comp(*f1, *f2)) {
+    using ret_t = decltype(comp(*f1, *f2));
+    static_assert(
+        std::disjunction_v<
+            std::is_same<ret_t, std::strong_ordering>, std::is_same<ret_t, std::weak_ordering>,
+            std::is_same<ret_t, std::partial_ordering>>,
+        "The return type must be a comparison category type."
+    );
+
+    bool exhaust1 = (f1 == l1);
+    bool exhaust2 = (f2 == l2);
+    for (; !exhaust1 && !exhaust2; exhaust1 = (++f1 == l1), exhaust2 = (++f2 == l2))
+        if (auto c = comp(*f1, *f2); c != 0) return c;
+
+    return !exhaust1 ? std::strong_ordering::greater
+         : !exhaust2 ? std::strong_ordering::less
+                     : std::strong_ordering::equal;
+}
+
+// TODO order CPOs
+
+}  // namespace std

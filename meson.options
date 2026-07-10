@@ -1,0 +1,18 @@
+option(
+    'enable_heap',
+    type: 'boolean',
+    value: false,
+    description: 'enable the heap',
+)
+option(
+    'has_atomics',
+    type: 'boolean',
+    value: false,
+    description: 'whether atomics should be used',
+)
+option(
+    'has_exceptions',
+    type: 'boolean',
+    value: false,
+    description: 'enable exceptions',
+)

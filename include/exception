@@ -1,0 +1,34 @@
+#pragma once
+
+namespace std {
+
+using terminate_handler = void (*)();
+[[noreturn]] void terminate() noexcept;
+terminate_handler set_terminate(terminate_handler h) noexcept;
+terminate_handler get_terminate() noexcept;
+
+class exception {
+public:
+    constexpr exception() noexcept         = default;
+    exception(exception const&)            = default;
+    exception& operator=(exception const&) = default;
+
+    virtual ~exception();
+    [[nodiscard]] constexpr virtual char const* what() const noexcept { return "exception"; }
+};
+
+class bad_exception: public exception {
+public:
+    constexpr bad_exception() noexcept             = default;
+    bad_exception(bad_exception const&)            = default;
+    bad_exception& operator=(bad_exception const&) = default;
+
+    virtual ~bad_exception() override;
+    [[nodiscard]] constexpr virtual char const* what() const noexcept override {
+        return "bad_exception";
+    }
+};
+
+[[nodiscard]] int uncaught_exception() noexcept;
+
+}  // namespace std
