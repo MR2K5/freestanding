@@ -1,0 +1,12 @@
+#pragma once
+
+#include <__algorithm/copy_move_fill_find.hpp>
+#include <__algorithm/fold.hpp>
+#include <__algorithm/heap.hpp>
+#include <__algorithm/minmax.hpp>
+#include <__algorithm/mutating.hpp>
+#include <__algorithm/nonmodifying.hpp>
+#include <__algorithm/sort.hpp>
+#include <__algorithm/set.hpp>
+#include <__algorithm/partition.hpp>
+#include <__algorithm/permutation.hpp>

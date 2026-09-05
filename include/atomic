@@ -1,9 +1,23 @@
 #pragma once
 
-#include <config.hpp>
+#include <__config.hpp>
+
+#include <__algorithm/minmax.hpp>
+#include <__memory/base.hpp>
+#include <array>
+#include <bit>
+#include <cstddef>
+#include <type_traits>
+#include <utility>
 
 namespace std {
-enum class memory_order : char { relaxed = 0, acquire = 2, release = 3, acq_rel = 4, seq_cst = 5 };
+enum class memory_order : char {
+    relaxed = __ATOMIC_RELAXED,
+    acquire = __ATOMIC_ACQUIRE,
+    release = __ATOMIC_RELEASE,
+    acq_rel = __ATOMIC_ACQ_REL,
+    seq_cst = __ATOMIC_SEQ_CST
+};
 
 inline constexpr memory_order memory_order_relaxed = memory_order::relaxed;
 inline constexpr memory_order memory_order_acquire = memory_order::acquire;
@@ -11,12 +25,1513 @@ inline constexpr memory_order memory_order_release = memory_order::release;
 inline constexpr memory_order memory_order_acq_rel = memory_order::acq_rel;
 inline constexpr memory_order memory_order_seq_cst = memory_order::seq_cst;
 
-#if _STD_HAS_ATOMICS
-#error unimplemented
+template<class> struct atomic;
+
+constexpr int __get_order(memory_order o) noexcept {
+    return std::to_underlying(o);
+}
+constexpr memory_order __get_order_failure(memory_order o) noexcept {
+    if (o == memory_order::acq_rel) return memory_order::acquire;
+    if (o == memory_order::release) return memory_order::relaxed;
+    return o;
+}
+
+[[gnu::always_inline]] inline void __cpu_relax() noexcept {
+#ifdef __x86_64__
+    __builtin_ia32_pause();
 #else
-
-
-
+#  error "Not implemented"
 #endif
+}
+
+template<class T> constexpr bool __atomic_bitwise_eq(T x, T y) noexcept {
+    if constexpr (std::is_integral_v<T> || std::is_pointer_v<T> || std::is_enum_v<T>) {
+        return x == y;
+    } else if consteval {
+        auto v1 = std::bit_cast<std::array<char, sizeof(T)>>(x);
+        auto v2 = std::bit_cast<std::array<char, sizeof(T)>>(y);
+        return __builtin_memcmp(v1.data(), v2.data(), sizeof(T)) == 0;
+    } else {
+        return __builtin_memcmp(&x, &y, sizeof(T)) == 0;
+    }
+}
+
+// TODO e.g. low power states?
+template<class T> void __atomic_wait(T const volatile* p, T old, memory_order o) noexcept {
+    while (1) {
+        T val;
+        __atomic_load(p, &val, __get_order(o));
+        if (!__atomic_bitwise_eq(val, old)) return;
+        __cpu_relax();
+    }
+}
+template<class T> constexpr void __atomic_wait(T const* p, T old, memory_order o) noexcept {
+    if consteval {
+        if (__atomic_bitwise_eq(*p, old)) std::unreachable();
+    } else {
+        while (1) {
+            T val;
+            __atomic_load(p, &val, __get_order(o));
+            if (!__atomic_bitwise_eq(val, old)) return;
+            __cpu_relax();
+        }
+    }
+}
+
+template<bool, class T> void __atomic_notify(T volatile*) noexcept {}
+template<bool, class T> constexpr void __atomic_notify(T*) noexcept {}
+
+// Helper to inject difference_type for integral, floating-point, and pointer specializations
+template<class T> struct __atomic_members {};
+
+template<class T> requires(is_integral_v<T> && !is_same_v<T, bool>) || is_floating_point_v<T>
+struct __atomic_members<T> {
+    using difference_type = T;
+};
+
+template<class T> requires is_pointer_v<T> struct __atomic_members<T> {
+    using difference_type = ptrdiff_t;
+};
+
+template<class T> struct atomic: __atomic_members<T> {
+    static_assert(
+        is_trivially_copyable_v<T> && is_copy_constructible_v<T> && is_move_constructible_v<T>
+            && is_copy_assignable_v<T> && is_move_assignable_v<T> && is_same_v<T, remove_cv_t<T>>,
+        "std::atomic<T> requires T to be a cv-unqualified, trivially copyable, and "
+        "copyable/movable type."
+    );
+
+    using value_type = T;
+
+    static constexpr bool is_always_lock_free = __atomic_always_lock_free(sizeof(T), 0);
+
+private:
+    static constexpr bool __is_bool  = is_same_v<T, bool>;
+    static constexpr bool __use_n    = is_arithmetic_v<T> || is_pointer_v<T>;
+    static constexpr bool __integral = is_integral_v<T> && !__is_bool;
+    static constexpr bool __floating = is_floating_point_v<T>;
+    static constexpr bool __pointer  = is_pointer_v<T> && is_object_v<remove_pointer_t<T>>;
+
+    static constexpr std::size_t __required_align =
+        (sizeof(T) <= 16) ? std::max(alignof(T), std::bit_ceil(sizeof(T))) : alignof(T);
+
+    alignas(__required_align) T value_;
+
+    constexpr auto* __ptr(this auto&& self) noexcept { return __builtin_addressof(self.value_); }
+
+public:
+    // [atomics.types.operations] Constructors & Assignment
+    constexpr atomic() noexcept(is_nothrow_default_constructible_v<T>)
+        requires is_default_constructible_v<T>
+        : value_() {}
+
+    constexpr atomic(T desired) noexcept: value_(desired) {}
+
+    atomic(atomic const&)                     = delete;
+    atomic& operator=(atomic const&)          = delete;
+    atomic& operator=(atomic const&) volatile = delete;
+
+    // Lock-free queries
+    bool is_lock_free() const noexcept { return __atomic_is_lock_free(sizeof(T), __ptr()); }
+    bool is_lock_free() const volatile noexcept {
+        return __atomic_is_lock_free(sizeof(T), __ptr());
+    }
+
+    // Store operations
+    constexpr void store(T desired, memory_order order = memory_order_seq_cst) noexcept {
+        if consteval {
+            value_ = desired;
+        } else {
+            if constexpr (__use_n) {
+                __atomic_store_n(__ptr(), desired, __get_order(order));
+            } else {
+                __atomic_store(__ptr(), &desired, __get_order(order));
+            }
+        }
+    }
+    void store(T desired, memory_order order = memory_order_seq_cst) volatile noexcept
+        requires is_always_lock_free {
+        if constexpr (__use_n) {
+            __atomic_store_n(__ptr(), desired, __get_order(order));
+        } else {
+            __atomic_store(__ptr(), &desired, __get_order(order));
+        }
+    }
+
+    constexpr T operator=(T desired) noexcept {
+        store(desired);
+        return desired;
+    }
+    T operator=(T desired) volatile noexcept requires is_always_lock_free {
+        store(desired);
+        return desired;
+    }
+
+    // Load operations
+    constexpr T load(memory_order order = memory_order_seq_cst) const noexcept {
+        if consteval {
+            return value_;
+        } else {
+            if constexpr (__use_n) {
+                return __atomic_load_n(__ptr(), __get_order(order));
+            } else {
+                T ret;
+                __atomic_load(__ptr(), &ret, __get_order(order));
+                return ret;
+            }
+        }
+    }
+    T load(memory_order order = memory_order_seq_cst) const volatile noexcept
+        requires is_always_lock_free {
+        if constexpr (__use_n) {
+            return __atomic_load_n(__ptr(), __get_order(order));
+        } else {
+            T ret;
+            __atomic_load(__ptr(), &ret, __get_order(order));
+            return ret;
+        }
+    }
+
+    constexpr operator T() const noexcept { return load(); }
+    operator T() const volatile noexcept requires is_always_lock_free { return load(); }
+
+    // Exchange operations
+    constexpr T exchange(T desired, memory_order order = memory_order_seq_cst) noexcept {
+        if consteval {
+            return std::exchange(value_, desired);
+        } else {
+            if constexpr (__use_n) {
+                return __atomic_exchange_n(__ptr(), desired, __get_order(order));
+            } else {
+                T ret;
+                __atomic_exchange(__ptr(), &desired, &ret, __get_order(order));
+                return ret;
+            }
+        }
+    }
+    T exchange(T desired, memory_order order = memory_order_seq_cst) volatile noexcept
+        requires is_always_lock_free {
+        if constexpr (__use_n) {
+            return __atomic_exchange_n(__ptr(), desired, __get_order(order));
+        } else {
+            T ret;
+            __atomic_exchange(__ptr(), &desired, &ret, __get_order(order));
+            return ret;
+        }
+    }
+
+    // Compare and Exchange operations
+    constexpr bool compare_exchange_weak(
+        T& expected, T desired, memory_order success, memory_order failure
+    ) noexcept {
+        if consteval {
+            return compare_exchange_strong(expected, desired, success, failure);
+        } else {
+            if constexpr (__use_n) {
+                return __atomic_compare_exchange_n(
+                    __ptr(), &expected, desired, true, __get_order(success), __get_order(failure)
+                );
+            } else {
+                return __atomic_compare_exchange(
+                    __ptr(), &expected, &desired, true, __get_order(success), __get_order(failure)
+                );
+            }
+        }
+    }
+    bool compare_exchange_weak(
+        T& expected, T desired, memory_order success, memory_order failure
+    ) volatile noexcept requires is_always_lock_free {
+        if constexpr (__use_n) {
+            return __atomic_compare_exchange_n(
+                __ptr(), &expected, desired, true, __get_order(success), __get_order(failure)
+            );
+        } else {
+            return __atomic_compare_exchange(
+                __ptr(), &expected, &desired, true, __get_order(success), __get_order(failure)
+            );
+        }
+    }
+
+    constexpr bool compare_exchange_strong(
+        T& expected, T desired, memory_order success, memory_order failure
+    ) noexcept {
+        if consteval {
+            if (__atomic_bitwise_eq(value_, expected)) {
+                value_ = desired;
+                return true;
+            } else {
+                expected = value_;
+                return false;
+            }
+        } else {
+            if constexpr (__use_n) {
+                return __atomic_compare_exchange_n(
+                    __ptr(), &expected, desired, false, __get_order(success), __get_order(failure)
+                );
+            } else {
+                return __atomic_compare_exchange(
+                    __ptr(), &expected, &desired, false, __get_order(success), __get_order(failure)
+                );
+            }
+        }
+    }
+    bool compare_exchange_strong(
+        T& expected, T desired, memory_order success, memory_order failure
+    ) volatile noexcept requires is_always_lock_free {
+        if constexpr (__use_n) {
+            return __atomic_compare_exchange_n(
+                __ptr(), &expected, desired, false, __get_order(success), __get_order(failure)
+            );
+        } else {
+            return __atomic_compare_exchange(
+                __ptr(), &expected, &desired, false, __get_order(success), __get_order(failure)
+            );
+        }
+    }
+
+    constexpr bool compare_exchange_weak(
+        T& expected, T desired, memory_order order = memory_order_seq_cst
+    ) noexcept {
+        return compare_exchange_weak(expected, desired, order, __get_order_failure(order));
+    }
+    bool compare_exchange_weak(
+        T& expected, T desired, memory_order order = memory_order_seq_cst
+    ) volatile noexcept requires is_always_lock_free {
+        return compare_exchange_weak(expected, desired, order, __get_order_failure(order));
+    }
+
+    constexpr bool compare_exchange_strong(
+        T& expected, T desired, memory_order order = memory_order_seq_cst
+    ) noexcept {
+        return compare_exchange_strong(expected, desired, order, __get_order_failure(order));
+    }
+    bool compare_exchange_strong(
+        T& expected, T desired, memory_order order = memory_order_seq_cst
+    ) volatile noexcept requires is_always_lock_free {
+        return compare_exchange_strong(expected, desired, order, __get_order_failure(order));
+    }
+
+    // Wait & Notify operations
+    constexpr void wait(T old, memory_order order = memory_order_seq_cst) const noexcept {
+        __atomic_wait(__ptr(), old, order);
+    }
+    void wait(T old, memory_order order = memory_order_seq_cst) const volatile noexcept
+        requires is_always_lock_free {
+        __atomic_wait(__ptr(), old, order);
+    }
+
+    constexpr void notify_one() noexcept { __atomic_notify<false>(__ptr()); }
+    void notify_one() volatile noexcept requires is_always_lock_free {
+        __atomic_notify<false>(__ptr());
+    }
+
+    constexpr void notify_all() noexcept { __atomic_notify<true>(__ptr()); }
+    void notify_all() volatile noexcept requires is_always_lock_free {
+        __atomic_notify<true>(__ptr());
+    }
+
+    // --- Specializations for Integral Types [atomics.types.int] ---
+
+    constexpr T fetch_add(T v, memory_order o = memory_order_seq_cst) noexcept requires __integral {
+        if consteval {
+            auto r  = value_;
+            value_ += v;
+            return r;
+        } else {
+            return __atomic_fetch_add(__ptr(), v, __get_order(o));
+        }
+    }
+    T fetch_add(T v, memory_order o = memory_order_seq_cst) volatile noexcept
+        requires is_always_lock_free && __integral {
+        return __atomic_fetch_add(__ptr(), v, __get_order(o));
+    }
+
+    constexpr T fetch_sub(T v, memory_order o = memory_order_seq_cst) noexcept requires __integral {
+        if consteval {
+            auto r  = value_;
+            value_ -= v;
+            return r;
+        } else {
+            return __atomic_fetch_sub(__ptr(), v, __get_order(o));
+        }
+    }
+    T fetch_sub(T v, memory_order o = memory_order_seq_cst) volatile noexcept
+        requires is_always_lock_free && __integral {
+        return __atomic_fetch_sub(__ptr(), v, __get_order(o));
+    }
+
+    constexpr T fetch_and(T v, memory_order o = memory_order_seq_cst) noexcept requires __integral {
+        if consteval {
+            auto r  = value_;
+            value_ &= v;
+            return r;
+        } else {
+            return __atomic_fetch_and(__ptr(), v, __get_order(o));
+        }
+    }
+    T fetch_and(T v, memory_order o = memory_order_seq_cst) volatile noexcept
+        requires is_always_lock_free && __integral {
+        return __atomic_fetch_and(__ptr(), v, __get_order(o));
+    }
+
+    constexpr T fetch_or(T v, memory_order o = memory_order_seq_cst) noexcept requires __integral {
+        if consteval {
+            auto r  = value_;
+            value_ |= v;
+            return r;
+        } else {
+            return __atomic_fetch_or(__ptr(), v, __get_order(o));
+        }
+    }
+    T fetch_or(T v, memory_order o = memory_order_seq_cst) volatile noexcept
+        requires is_always_lock_free && __integral {
+        return __atomic_fetch_or(__ptr(), v, __get_order(o));
+    }
+
+    constexpr T fetch_xor(T v, memory_order o = memory_order_seq_cst) noexcept requires __integral {
+        if consteval {
+            auto r  = value_;
+            value_ ^= v;
+            return r;
+        } else {
+            return __atomic_fetch_xor(__ptr(), v, __get_order(o));
+        }
+    }
+    T fetch_xor(T v, memory_order o = memory_order_seq_cst) volatile noexcept
+        requires is_always_lock_free && __integral {
+        return __atomic_fetch_xor(__ptr(), v, __get_order(o));
+    }
+
+    constexpr T fetch_max(T v, memory_order o = memory_order_seq_cst) noexcept requires __integral {
+        if consteval {
+            auto r = value_;
+            value_ = std::max(value_, v);
+            return r;
+        } else {
+            return __atomic_fetch_max(__ptr(), v, __get_order(o));
+        }
+    }
+    T fetch_max(T v, memory_order o = memory_order_seq_cst) volatile noexcept
+        requires is_always_lock_free && __integral {
+        return __atomic_fetch_max(__ptr(), v, __get_order(o));
+    }
+
+    constexpr T fetch_min(T v, memory_order o = memory_order_seq_cst) noexcept requires __integral {
+        if consteval {
+            auto r = value_;
+            value_ = std::min(value_, v);
+            return r;
+        } else {
+            return __atomic_fetch_min(__ptr(), v, __get_order(o));
+        }
+    }
+    T fetch_min(T v, memory_order o = memory_order_seq_cst) volatile noexcept
+        requires is_always_lock_free && __integral {
+        return __atomic_fetch_min(__ptr(), v, __get_order(o));
+    }
+
+    constexpr void store_add(T v, memory_order o = memory_order_seq_cst) noexcept
+        requires __integral {
+        fetch_add(v, o);
+    }
+    void store_add(T v, memory_order o = memory_order_seq_cst) volatile noexcept
+        requires is_always_lock_free && __integral {
+        fetch_add(v, o);
+    }
+
+    constexpr void store_sub(T v, memory_order o = memory_order_seq_cst) noexcept
+        requires __integral {
+        fetch_sub(v, o);
+    }
+    void store_sub(T v, memory_order o = memory_order_seq_cst) volatile noexcept
+        requires is_always_lock_free && __integral {
+        fetch_sub(v, o);
+    }
+
+    constexpr void store_and(T v, memory_order o = memory_order_seq_cst) noexcept
+        requires __integral {
+        fetch_and(v, o);
+    }
+    void store_and(T v, memory_order o = memory_order_seq_cst) volatile noexcept
+        requires is_always_lock_free && __integral {
+        fetch_and(v, o);
+    }
+
+    constexpr void store_or(T v, memory_order o = memory_order_seq_cst) noexcept requires __integral
+    {
+        fetch_or(v, o);
+    }
+    void store_or(T v, memory_order o = memory_order_seq_cst) volatile noexcept
+        requires is_always_lock_free && __integral {
+        fetch_or(v, o);
+    }
+
+    constexpr void store_xor(T v, memory_order o = memory_order_seq_cst) noexcept
+        requires __integral {
+        fetch_xor(v, o);
+    }
+    void store_xor(T v, memory_order o = memory_order_seq_cst) volatile noexcept
+        requires is_always_lock_free && __integral {
+        fetch_xor(v, o);
+    }
+
+    constexpr void store_max(T v, memory_order o = memory_order_seq_cst) noexcept
+        requires __integral {
+        fetch_max(v, o);
+    }
+    void store_max(T v, memory_order o = memory_order_seq_cst) volatile noexcept
+        requires is_always_lock_free && __integral {
+        fetch_max(v, o);
+    }
+
+    constexpr void store_min(T v, memory_order o = memory_order_seq_cst) noexcept
+        requires __integral {
+        fetch_min(v, o);
+    }
+    void store_min(T v, memory_order o = memory_order_seq_cst) volatile noexcept
+        requires is_always_lock_free && __integral {
+        fetch_min(v, o);
+    }
+
+    constexpr T operator++(int) noexcept requires __integral { return fetch_add(1); }
+    T operator++(int) volatile noexcept requires is_always_lock_free && __integral {
+        return fetch_add(1);
+    }
+    constexpr T operator--(int) noexcept requires __integral { return fetch_sub(1); }
+    T operator--(int) volatile noexcept requires is_always_lock_free && __integral {
+        return fetch_sub(1);
+    }
+    constexpr T operator++() noexcept requires __integral { return fetch_add(1) + 1; }
+    T operator++() volatile noexcept requires is_always_lock_free && __integral {
+        return fetch_add(1) + 1;
+    }
+    constexpr T operator--() noexcept requires __integral { return fetch_sub(1) - 1; }
+    T operator--() volatile noexcept requires is_always_lock_free && __integral {
+        return fetch_sub(1) - 1;
+    }
+
+    constexpr T operator+=(T v) noexcept requires __integral { return fetch_add(v) + v; }
+    T operator+=(T v) volatile noexcept requires is_always_lock_free && __integral {
+        return fetch_add(v) + v;
+    }
+    constexpr T operator-=(T v) noexcept requires __integral { return fetch_sub(v) - v; }
+    T operator-=(T v) volatile noexcept requires is_always_lock_free && __integral {
+        return fetch_sub(v) - v;
+    }
+    constexpr T operator&=(T v) noexcept requires __integral { return fetch_and(v) & v; }
+    T operator&=(T v) volatile noexcept requires is_always_lock_free && __integral {
+        return fetch_and(v) & v;
+    }
+    constexpr T operator|=(T v) noexcept requires __integral { return fetch_or(v) | v; }
+    T operator|=(T v) volatile noexcept requires is_always_lock_free && __integral {
+        return fetch_or(v) | v;
+    }
+    constexpr T operator^=(T v) noexcept requires __integral { return fetch_xor(v) ^ v; }
+    T operator^=(T v) volatile noexcept requires is_always_lock_free && __integral {
+        return fetch_xor(v) ^ v;
+    }
+
+    // --- Specializations for Pointers [atomics.types.pointer] ---
+
+    constexpr T fetch_add(ptrdiff_t v, memory_order o = memory_order_seq_cst) noexcept
+        requires __pointer {
+        if consteval {
+            auto r  = value_;
+            value_ += v;
+            return r;
+        } else {
+            return __atomic_fetch_add(__ptr(), v * sizeof(remove_pointer_t<T>), __get_order(o));
+        }
+    }
+    T fetch_add(ptrdiff_t v, memory_order o = memory_order_seq_cst) volatile noexcept
+        requires is_always_lock_free && __pointer {
+        return __atomic_fetch_add(__ptr(), v * sizeof(remove_pointer_t<T>), __get_order(o));
+    }
+
+    constexpr T fetch_sub(ptrdiff_t v, memory_order o = memory_order_seq_cst) noexcept
+        requires __pointer {
+        if consteval {
+            auto r  = value_;
+            value_ -= v;
+            return r;
+        } else {
+            return __atomic_fetch_sub(__ptr(), v * sizeof(remove_pointer_t<T>), __get_order(o));
+        }
+    }
+    T fetch_sub(ptrdiff_t v, memory_order o = memory_order_seq_cst) volatile noexcept
+        requires is_always_lock_free && __pointer {
+        return __atomic_fetch_sub(__ptr(), v * sizeof(remove_pointer_t<T>), __get_order(o));
+    }
+
+    constexpr T fetch_max(T v, memory_order o = memory_order_seq_cst) noexcept requires __pointer {
+        if consteval {
+            auto r = value_;
+            value_ = std::max(value_, v);
+            return r;
+        } else {
+            return __atomic_fetch_max(__ptr(), v, __get_order(o));
+        }
+    }
+    T fetch_max(T v, memory_order o = memory_order_seq_cst) volatile noexcept
+        requires is_always_lock_free && __pointer {
+        return __atomic_fetch_max(__ptr(), v, __get_order(o));
+    }
+
+    constexpr T fetch_min(T v, memory_order o = memory_order_seq_cst) noexcept requires __pointer {
+        if consteval {
+            auto r = value_;
+            value_ = std::min(value_, v);
+            return r;
+        } else {
+            return __atomic_fetch_min(__ptr(), v, __get_order(o));
+        }
+    }
+    T fetch_min(T v, memory_order o = memory_order_seq_cst) volatile noexcept
+        requires is_always_lock_free && __pointer {
+        return __atomic_fetch_min(__ptr(), v, __get_order(o));
+    }
+
+    constexpr void store_add(ptrdiff_t v, memory_order o = memory_order_seq_cst) noexcept
+        requires __pointer {
+        fetch_add(v, o);
+    }
+    void store_add(ptrdiff_t v, memory_order o = memory_order_seq_cst) volatile noexcept
+        requires is_always_lock_free && __pointer {
+        fetch_add(v, o);
+    }
+
+    constexpr void store_sub(ptrdiff_t v, memory_order o = memory_order_seq_cst) noexcept
+        requires __pointer {
+        fetch_sub(v, o);
+    }
+    void store_sub(ptrdiff_t v, memory_order o = memory_order_seq_cst) volatile noexcept
+        requires is_always_lock_free && __pointer {
+        fetch_sub(v, o);
+    }
+
+    constexpr void store_max(T v, memory_order o = memory_order_seq_cst) noexcept requires __pointer
+    {
+        fetch_max(v, o);
+    }
+    void store_max(T v, memory_order o = memory_order_seq_cst) volatile noexcept
+        requires is_always_lock_free && __pointer {
+        fetch_max(v, o);
+    }
+
+    constexpr void store_min(T v, memory_order o = memory_order_seq_cst) noexcept requires __pointer
+    {
+        fetch_min(v, o);
+    }
+    void store_min(T v, memory_order o = memory_order_seq_cst) volatile noexcept
+        requires is_always_lock_free && __pointer {
+        fetch_min(v, o);
+    }
+
+    constexpr T operator++(int) noexcept requires __pointer { return fetch_add(1); }
+    T operator++(int) volatile noexcept requires is_always_lock_free && __pointer {
+        return fetch_add(1);
+    }
+    constexpr T operator--(int) noexcept requires __pointer { return fetch_sub(1); }
+    T operator--(int) volatile noexcept requires is_always_lock_free && __pointer {
+        return fetch_sub(1);
+    }
+    constexpr T operator++() noexcept requires __pointer { return fetch_add(1) + 1; }
+    T operator++() volatile noexcept requires is_always_lock_free && __pointer {
+        return fetch_add(1) + 1;
+    }
+    constexpr T operator--() noexcept requires __pointer { return fetch_sub(1) - 1; }
+    T operator--() volatile noexcept requires is_always_lock_free && __pointer {
+        return fetch_sub(1) - 1;
+    }
+
+    constexpr T operator+=(ptrdiff_t v) noexcept requires __pointer { return fetch_add(v) + v; }
+    T operator+=(ptrdiff_t v) volatile noexcept requires is_always_lock_free && __pointer {
+        return fetch_add(v) + v;
+    }
+    constexpr T operator-=(ptrdiff_t v) noexcept requires __pointer { return fetch_sub(v) - v; }
+    T operator-=(ptrdiff_t v) volatile noexcept requires is_always_lock_free && __pointer {
+        return fetch_sub(v) - v;
+    }
+
+    // --- Specializations for Floating-Point Types [atomics.types.float] ---
+
+    constexpr T fetch_add(T v, memory_order o = memory_order_seq_cst) noexcept requires __floating {
+        if consteval {
+            auto r  = value_;
+            value_ += v;
+            return r;
+        } else {
+            T old_val = load(memory_order::relaxed);
+            while (!compare_exchange_weak(old_val, old_val + v, o, memory_order::relaxed)) {}
+            return old_val;
+        }
+    }
+    T fetch_add(T v, memory_order o = memory_order_seq_cst) volatile noexcept
+        requires is_always_lock_free && __floating {
+        T old_val = load(memory_order::relaxed);
+        while (!compare_exchange_weak(old_val, old_val + v, o, memory_order::relaxed)) {}
+        return old_val;
+    }
+
+    constexpr T fetch_sub(T v, memory_order o = memory_order_seq_cst) noexcept requires __floating {
+        if consteval {
+            auto r  = value_;
+            value_ -= v;
+            return r;
+        } else {
+            T old_val = load(memory_order::relaxed);
+            while (!compare_exchange_weak(old_val, old_val - v, o, memory_order::relaxed)) {}
+            return old_val;
+        }
+    }
+    T fetch_sub(T v, memory_order o = memory_order_seq_cst) volatile noexcept
+        requires is_always_lock_free && __floating {
+        T old_val = load(memory_order::relaxed);
+        while (!compare_exchange_weak(old_val, old_val - v, o, memory_order::relaxed)) {}
+        return old_val;
+    }
+
+    constexpr T fetch_max(T v, memory_order o = memory_order_seq_cst) noexcept requires __floating {
+        if consteval {
+            auto r = value_;
+            value_ = std::max(value_, v);
+            return r;
+        } else {
+            T old_val = load(memory_order::relaxed);
+            while (!compare_exchange_weak(
+                old_val,
+                (__builtin_isnan(v) ? old_val
+                                    : (__builtin_isnan(old_val) ? v : (old_val < v ? v : old_val))),
+                o, memory_order::relaxed
+            )) {}
+            return old_val;
+        }
+    }
+    T fetch_max(T v, memory_order o = memory_order_seq_cst) volatile noexcept
+        requires is_always_lock_free && __floating {
+        T old_val = load(memory_order::relaxed);
+        while (!compare_exchange_weak(
+            old_val,
+            (__builtin_isnan(v) ? old_val
+                                : (__builtin_isnan(old_val) ? v : (old_val < v ? v : old_val))),
+            o, memory_order::relaxed
+        )) {}
+        return old_val;
+    }
+
+    constexpr T fetch_min(T v, memory_order o = memory_order_seq_cst) noexcept requires __floating {
+        if consteval {
+            auto r = value_;
+            value_ = std::min(value_, v);
+            return r;
+        } else {
+            T old_val = load(memory_order::relaxed);
+            while (!compare_exchange_weak(
+                old_val,
+                (__builtin_isnan(v) ? old_val
+                                    : (__builtin_isnan(old_val) ? v : (v < old_val ? v : old_val))),
+                o, memory_order::relaxed
+            )) {}
+            return old_val;
+        }
+    }
+    T fetch_min(T v, memory_order o = memory_order_seq_cst) volatile noexcept
+        requires is_always_lock_free && __floating {
+        T old_val = load(memory_order::relaxed);
+        while (!compare_exchange_weak(
+            old_val,
+            (__builtin_isnan(v) ? old_val
+                                : (__builtin_isnan(old_val) ? v : (v < old_val ? v : old_val))),
+            o, memory_order::relaxed
+        )) {}
+        return old_val;
+    }
+
+    constexpr T fetch_fmaximum(T v, memory_order o = memory_order_seq_cst) noexcept
+        requires __floating {
+        T old_val = load(memory_order::relaxed);
+        while (!compare_exchange_weak(
+            old_val,
+            (__builtin_isnan(old_val) || __builtin_isnan(v)
+                 ? (__builtin_isnan(old_val) ? old_val : v)
+                 : (old_val < v ? v : old_val)),
+            o, memory_order::relaxed
+        )) {}
+        return old_val;
+    }
+    T fetch_fmaximum(T v, memory_order o = memory_order_seq_cst) volatile noexcept
+        requires is_always_lock_free && __floating {
+        T old_val = load(memory_order::relaxed);
+        while (!compare_exchange_weak(
+            old_val,
+            (__builtin_isnan(old_val) || __builtin_isnan(v)
+                 ? (__builtin_isnan(old_val) ? old_val : v)
+                 : (old_val < v ? v : old_val)),
+            o, memory_order::relaxed
+        )) {}
+        return old_val;
+    }
+
+    constexpr T fetch_fminimum(T v, memory_order o = memory_order_seq_cst) noexcept
+        requires __floating {
+        T old_val = load(memory_order::relaxed);
+        while (!compare_exchange_weak(
+            old_val,
+            (__builtin_isnan(old_val) || __builtin_isnan(v)
+                 ? (__builtin_isnan(old_val) ? old_val : v)
+                 : (v < old_val ? v : old_val)),
+            o, memory_order::relaxed
+        )) {}
+        return old_val;
+    }
+    T fetch_fminimum(T v, memory_order o = memory_order_seq_cst) volatile noexcept
+        requires is_always_lock_free && __floating {
+        T old_val = load(memory_order::relaxed);
+        while (!compare_exchange_weak(
+            old_val,
+            (__builtin_isnan(old_val) || __builtin_isnan(v)
+                 ? (__builtin_isnan(old_val) ? old_val : v)
+                 : (v < old_val ? v : old_val)),
+            o, memory_order::relaxed
+        )) {}
+        return old_val;
+    }
+
+    constexpr T fetch_fmaximum_num(T v, memory_order o = memory_order_seq_cst) noexcept
+        requires __floating {
+        return fetch_max(v, o);
+    }
+    T fetch_fmaximum_num(T v, memory_order o = memory_order_seq_cst) volatile noexcept
+        requires is_always_lock_free && __floating {
+        return fetch_max(v, o);
+    }
+
+    constexpr T fetch_fminimum_num(T v, memory_order o = memory_order_seq_cst) noexcept
+        requires __floating {
+        return fetch_min(v, o);
+    }
+    T fetch_fminimum_num(T v, memory_order o = memory_order_seq_cst) volatile noexcept
+        requires is_always_lock_free && __floating {
+        return fetch_min(v, o);
+    }
+
+    constexpr void store_add(T v, memory_order o = memory_order_seq_cst) noexcept
+        requires __floating {
+        fetch_add(v, o);
+    }
+    void store_add(T v, memory_order o = memory_order_seq_cst) volatile noexcept
+        requires is_always_lock_free && __floating {
+        fetch_add(v, o);
+    }
+
+    constexpr void store_sub(T v, memory_order o = memory_order_seq_cst) noexcept
+        requires __floating {
+        fetch_sub(v, o);
+    }
+    void store_sub(T v, memory_order o = memory_order_seq_cst) volatile noexcept
+        requires is_always_lock_free && __floating {
+        fetch_sub(v, o);
+    }
+
+    constexpr void store_max(T v, memory_order o = memory_order_seq_cst) noexcept
+        requires __floating {
+        fetch_max(v, o);
+    }
+    void store_max(T v, memory_order o = memory_order_seq_cst) volatile noexcept
+        requires is_always_lock_free && __floating {
+        fetch_max(v, o);
+    }
+
+    constexpr void store_min(T v, memory_order o = memory_order_seq_cst) noexcept
+        requires __floating {
+        fetch_min(v, o);
+    }
+    void store_min(T v, memory_order o = memory_order_seq_cst) volatile noexcept
+        requires is_always_lock_free && __floating {
+        fetch_min(v, o);
+    }
+
+    constexpr void store_fmaximum(T v, memory_order o = memory_order_seq_cst) noexcept
+        requires __floating {
+        fetch_fmaximum(v, o);
+    }
+    void store_fmaximum(T v, memory_order o = memory_order_seq_cst) volatile noexcept
+        requires is_always_lock_free && __floating {
+        fetch_fmaximum(v, o);
+    }
+
+    constexpr void store_fminimum(T v, memory_order o = memory_order_seq_cst) noexcept
+        requires __floating {
+        fetch_fminimum(v, o);
+    }
+    void store_fminimum(T v, memory_order o = memory_order_seq_cst) volatile noexcept
+        requires is_always_lock_free && __floating {
+        fetch_fminimum(v, o);
+    }
+
+    constexpr void store_fmaximum_num(T v, memory_order o = memory_order_seq_cst) noexcept
+        requires __floating {
+        fetch_fmaximum_num(v, o);
+    }
+    void store_fmaximum_num(T v, memory_order o = memory_order_seq_cst) volatile noexcept
+        requires is_always_lock_free && __floating {
+        fetch_fmaximum_num(v, o);
+    }
+
+    constexpr void store_fminimum_num(T v, memory_order o = memory_order_seq_cst) noexcept
+        requires __floating {
+        fetch_fminimum_num(v, o);
+    }
+    void store_fminimum_num(T v, memory_order o = memory_order_seq_cst) volatile noexcept
+        requires is_always_lock_free && __floating {
+        fetch_fminimum_num(v, o);
+    }
+
+    constexpr T operator+=(T v) noexcept requires __floating { return fetch_add(v) + v; }
+    T operator+=(T v) volatile noexcept requires is_always_lock_free && __floating {
+        return fetch_add(v) + v;
+    }
+    constexpr T operator-=(T v) noexcept requires __floating { return fetch_sub(v) - v; }
+    T operator-=(T v) volatile noexcept requires is_always_lock_free && __floating {
+        return fetch_sub(v) - v;
+    }
+};
+
+// Deduction Guide for std::atomic
+template<class T> atomic(T) -> atomic<T>;
+extern "C" constexpr void atomic_thread_fence(memory_order order) noexcept {
+    if !consteval { __atomic_thread_fence(__get_order(order)); }
+}
+
+extern "C" constexpr void atomic_signal_fence(memory_order order) noexcept {
+    if !consteval { __atomic_signal_fence(__get_order(order)); }
+}
+
+// TODO specialize for AVR
+
+struct atomic_flag {
+    constexpr atomic_flag() noexcept: value_(0) {}
+    atomic_flag(atomic_flag const&)                     = delete;
+    atomic_flag& operator=(atomic_flag const&)          = delete;
+    atomic_flag& operator=(atomic_flag const&) volatile = delete;
+
+    bool test(memory_order o = memory_order::seq_cst) const volatile noexcept {
+        return __atomic_load_n(&value_, __get_order(o)) != 0;
+    }
+    constexpr bool test(memory_order o = memory_order::seq_cst) const noexcept {
+        if consteval {
+            return value_ != 0;
+        } else {
+            return __atomic_load_n(&value_, __get_order(o)) != 0;
+        }
+    }
+    bool test_and_set(memory_order o = memory_order::seq_cst) volatile noexcept {
+        return __atomic_test_and_set(&value_, __get_order(o));
+    }
+    constexpr bool test_and_set(memory_order o = memory_order::seq_cst) noexcept {
+        if consteval {
+            return std::exchange(value_, __GCC_ATOMIC_TEST_AND_SET_TRUEVAL) != 0;
+        } else {
+            return __atomic_test_and_set(&value_, __get_order(o));
+        }
+    }
+    void clear(memory_order o = memory_order::seq_cst) volatile noexcept {
+        __atomic_clear(&value_, __get_order(o));
+    }
+    constexpr void clear(memory_order o = memory_order::seq_cst) noexcept {
+        if consteval {
+            value_ = 0;
+        } else {
+            __atomic_clear(&value_, __get_order(o));
+        }
+    }
+
+    void wait(bool old, memory_order o = memory_order::seq_cst) const volatile noexcept {
+        __atomic_wait(&value_, char(old ? __GCC_ATOMIC_TEST_AND_SET_TRUEVAL : 0), o);
+    }
+    constexpr void wait(bool old, memory_order o = memory_order::seq_cst) const noexcept {
+        __atomic_wait(&value_, char(old ? __GCC_ATOMIC_TEST_AND_SET_TRUEVAL : 0), o);
+    }
+    void notify_one() volatile noexcept { __atomic_notify<false>(&value_); }
+    constexpr void notify_one() noexcept { __atomic_notify<false>(&value_); }
+    void notify_all() volatile noexcept { __atomic_notify<true>(&value_); }
+    constexpr void notify_all() noexcept { __atomic_notify<true>(&value_); }
+
+private:
+    char value_;
+};
+
+// atomic_ref
+
+// SFINAE / Concepts helper to inject difference_type for integral, float, and pointer
+// specializations
+template<class T> struct __atomic_ref_members {};
+
+template<class T> requires(is_integral_v<remove_cv_t<T>> && !is_same_v<remove_cv_t<T>, bool>)
+                       || is_floating_point_v<remove_cv_t<T>> struct __atomic_ref_members<T> {
+    using difference_type = remove_cv_t<T>;
+};
+
+template<class T> requires is_pointer_v<remove_cv_t<T>> struct __atomic_ref_members<T> {
+    using difference_type = ptrdiff_t;
+};
+
+template<class T> struct atomic_ref: __atomic_ref_members<T> {
+    static_assert(
+        is_trivially_copyable_v<T>, "std::atomic_ref<T> requires T to be trivially copyable."
+    );
+
+public:
+    using value_type = remove_cv_t<T>;
+
+    static constexpr size_t required_alignment =
+        (sizeof(value_type) <= 16)
+            ? std::max(alignof(value_type), std::bit_ceil(sizeof(value_type)))
+            : alignof(value_type);
+
+    static constexpr bool is_always_lock_free = __atomic_always_lock_free(sizeof(value_type), 0);
+
+    static_assert(
+        !is_volatile_v<T> || is_always_lock_free,
+        "std::atomic_ref<volatile T> is ill-formed when operations are not always lock-free."
+    );
+
+private:
+    static constexpr bool __isconst  = is_const_v<T>;
+    static constexpr bool __use_n    = is_arithmetic_v<value_type> || is_pointer_v<value_type>;
+    static constexpr bool __integral = is_integral_v<value_type> && !is_same_v<value_type, bool>;
+    static constexpr bool __floating = is_floating_point_v<value_type>;
+    static constexpr bool __pointer =
+        is_pointer_v<value_type> && is_object_v<remove_pointer_t<value_type>>;
+
+    T* ptr_;
+
+public:
+    // [atomics.ref.ops] Constructors and assignment
+    constexpr explicit atomic_ref(T& obj) noexcept: ptr_(__builtin_addressof(obj)) {}
+    explicit atomic_ref(T&&)                         = delete;
+    constexpr atomic_ref(atomic_ref const&) noexcept = default;
+
+    template<class U> requires is_same_v<remove_cv_t<U>, value_type> && is_convertible_v<U*, T*>
+    constexpr atomic_ref(atomic_ref<U> const& ref) noexcept: ptr_(ref.address()) {}
+
+    atomic_ref& operator=(atomic_ref const&) = delete;
+
+    bool is_lock_free() const noexcept { return __atomic_is_lock_free(sizeof(value_type), ptr_); }
+
+    constexpr __copy_cv_t<T, void>* address() const noexcept { return ptr_; }
+
+    // --- General Operations ---
+
+    constexpr void
+    store(value_type desired, memory_order order = memory_order::seq_cst) const noexcept
+        requires(!__isconst) {
+        if consteval {
+            *ptr_ = desired;
+        } else {
+            if constexpr (__use_n) {
+                __atomic_store_n(ptr_, desired, __get_order(order));
+            } else {
+                __atomic_store(ptr_, &desired, __get_order(order));
+            }
+        }
+    }
+
+    constexpr value_type operator=(value_type desired) const noexcept requires(!__isconst) {
+        store(desired);
+        return desired;
+    }
+
+    constexpr value_type load(memory_order order = memory_order::seq_cst) const noexcept {
+        if consteval {
+            return *ptr_;
+        } else {
+            if constexpr (__use_n) {
+                return __atomic_load_n(ptr_, __get_order(order));
+            } else {
+                value_type ret;
+                __atomic_load(ptr_, &ret, __get_order(order));
+                return ret;
+            }
+        }
+    }
+
+    constexpr operator value_type() const noexcept { return load(); }
+
+    constexpr value_type
+    exchange(value_type desired, memory_order order = memory_order::seq_cst) const noexcept
+        requires(!__isconst) {
+        if consteval {
+            return std::exchange(*ptr_, desired);
+        } else {
+            if constexpr (__use_n) {
+                return __atomic_exchange_n(ptr_, desired, __get_order(order));
+            } else {
+                value_type ret;
+                __atomic_exchange(ptr_, &desired, &ret, __get_order(order));
+                return ret;
+            }
+        }
+    }
+
+    constexpr bool compare_exchange_weak(
+        value_type& expected, value_type desired, memory_order success, memory_order failure
+    ) const noexcept requires(!__isconst) {
+        if consteval {
+            return compare_exchange_strong(expected, desired, success, failure);
+        } else {
+            if constexpr (__use_n) {
+                return __atomic_compare_exchange_n(
+                    ptr_, &expected, desired, true, __get_order(success), __get_order(failure)
+                );
+            } else {
+                return __atomic_compare_exchange(
+                    ptr_, &expected, &desired, true, __get_order(success), __get_order(failure)
+                );
+            }
+        }
+    }
+
+    constexpr bool compare_exchange_strong(
+        value_type& expected, value_type desired, memory_order success, memory_order failure
+    ) const noexcept requires(!__isconst) {
+        if consteval {
+            if (__atomic_bitwise_eq(*ptr_, expected)) {
+                *ptr_ = desired;
+                return true;
+            } else {
+                expected = *ptr_;
+                return false;
+            }
+        } else {
+            if constexpr (__use_n) {
+                return __atomic_compare_exchange_n(
+                    ptr_, &expected, desired, false, __get_order(success), __get_order(failure)
+                );
+            } else {
+                return __atomic_compare_exchange(
+                    ptr_, &expected, &desired, false, __get_order(success), __get_order(failure)
+                );
+            }
+        }
+    }
+
+    constexpr bool compare_exchange_weak(
+        value_type& expected, value_type desired, memory_order order = memory_order::seq_cst
+    ) const noexcept requires(!__isconst) {
+        return compare_exchange_weak(expected, desired, order, __get_order_failure(order));
+    }
+
+    constexpr bool compare_exchange_strong(
+        value_type& expected, value_type desired, memory_order order = memory_order::seq_cst
+    ) const noexcept requires(!__isconst) {
+        return compare_exchange_strong(expected, desired, order, __get_order_failure(order));
+    }
+
+    constexpr void wait(value_type old, memory_order order = memory_order::seq_cst) const noexcept {
+        __atomic_wait(ptr_, old, order);
+    }
+
+    constexpr void notify_one() const noexcept requires(!__isconst) {
+        __atomic_notify<false>(ptr_);
+    }
+
+    constexpr void notify_all() const noexcept requires(!__isconst) { __atomic_notify<true>(ptr_); }
+
+    // --- Specializations for Integral Types [atomics.ref.int] ---
+
+    constexpr value_type
+    fetch_add(value_type v, memory_order o = memory_order::seq_cst) const noexcept
+        requires(!__isconst && __integral) {
+        if consteval {
+            auto r  = *ptr_;
+            *ptr_  += v;
+            return r;
+        } else {
+            return __atomic_fetch_add(ptr_, v, __get_order(o));
+        }
+    }
+
+    constexpr value_type
+    fetch_sub(value_type v, memory_order o = memory_order::seq_cst) const noexcept
+        requires(!__isconst && __integral) {
+        if consteval {
+            auto r  = *ptr_;
+            *ptr_  -= v;
+            return r;
+        } else {
+            return __atomic_fetch_sub(ptr_, v, __get_order(o));
+        }
+    }
+
+    constexpr value_type
+    fetch_and(value_type v, memory_order o = memory_order::seq_cst) const noexcept
+        requires(!__isconst && __integral) {
+        if consteval {
+            auto r  = *ptr_;
+            *ptr_  &= v;
+            return r;
+        } else {
+            return __atomic_fetch_and(ptr_, v, __get_order(o));
+        }
+    }
+
+    constexpr value_type
+    fetch_or(value_type v, memory_order o = memory_order::seq_cst) const noexcept
+        requires(!__isconst && __integral) {
+        if consteval {
+            auto r  = *ptr_;
+            *ptr_  |= v;
+            return r;
+        } else {
+            return __atomic_fetch_or(ptr_, v, __get_order(o));
+        }
+    }
+
+    constexpr value_type
+    fetch_xor(value_type v, memory_order o = memory_order::seq_cst) const noexcept
+        requires(!__isconst && __integral) {
+        if consteval {
+            auto r  = *ptr_;
+            *ptr_  ^= v;
+            return r;
+        } else {
+            return __atomic_fetch_xor(ptr_, v, __get_order(o));
+        }
+    }
+
+    constexpr value_type
+    fetch_max(value_type v, memory_order o = memory_order::seq_cst) const noexcept
+        requires(!__isconst && __integral) {
+        if consteval {
+            auto r = *ptr_;
+            *ptr_  = std::max(*ptr_, v);
+            return r;
+        } else {
+            return __atomic_fetch_max(ptr_, v, __get_order(o));
+        }
+    }
+
+    constexpr value_type
+    fetch_min(value_type v, memory_order o = memory_order::seq_cst) const noexcept
+        requires(!__isconst && __integral) {
+        if consteval {
+            auto r = *ptr_;
+            *ptr_  = std::min(*ptr_, v);
+            return r;
+        } else {
+            return __atomic_fetch_min(ptr_, v, __get_order(o));
+        }
+    }
+
+    constexpr void store_add(value_type v, memory_order o = memory_order::seq_cst) const noexcept
+        requires(!__isconst && __integral) {
+        fetch_add(v, o);
+    }
+    constexpr void store_sub(value_type v, memory_order o = memory_order::seq_cst) const noexcept
+        requires(!__isconst && __integral) {
+        fetch_sub(v, o);
+    }
+    constexpr void store_and(value_type v, memory_order o = memory_order::seq_cst) const noexcept
+        requires(!__isconst && __integral) {
+        fetch_and(v, o);
+    }
+    constexpr void store_or(value_type v, memory_order o = memory_order::seq_cst) const noexcept
+        requires(!__isconst && __integral) {
+        fetch_or(v, o);
+    }
+    constexpr void store_xor(value_type v, memory_order o = memory_order::seq_cst) const noexcept
+        requires(!__isconst && __integral) {
+        fetch_xor(v, o);
+    }
+    constexpr void store_max(value_type v, memory_order o = memory_order::seq_cst) const noexcept
+        requires(!__isconst && __integral) {
+        fetch_max(v, o);
+    }
+    constexpr void store_min(value_type v, memory_order o = memory_order::seq_cst) const noexcept
+        requires(!__isconst && __integral) {
+        fetch_min(v, o);
+    }
+
+    constexpr value_type operator++(int) const noexcept requires(!__isconst && __integral) {
+        return fetch_add(1);
+    }
+    constexpr value_type operator--(int) const noexcept requires(!__isconst && __integral) {
+        return fetch_sub(1);
+    }
+    constexpr value_type operator++() const noexcept requires(!__isconst && __integral) {
+        return fetch_add(1) + 1;
+    }
+    constexpr value_type operator--() const noexcept requires(!__isconst && __integral) {
+        return fetch_sub(1) - 1;
+    }
+    constexpr value_type operator+=(value_type v) const noexcept requires(!__isconst && __integral)
+    {
+        return fetch_add(v) + v;
+    }
+    constexpr value_type operator-=(value_type v) const noexcept requires(!__isconst && __integral)
+    {
+        return fetch_sub(v) - v;
+    }
+    constexpr value_type operator&=(value_type v) const noexcept requires(!__isconst && __integral)
+    {
+        return fetch_and(v) & v;
+    }
+    constexpr value_type operator|=(value_type v) const noexcept requires(!__isconst && __integral)
+    {
+        return fetch_or(v) | v;
+    }
+    constexpr value_type operator^=(value_type v) const noexcept requires(!__isconst && __integral)
+    {
+        return fetch_xor(v) ^ v;
+    }
+
+    // --- Specialization for Pointers [atomics.ref.pointer] ---
+
+    constexpr value_type
+    fetch_add(ptrdiff_t v, memory_order o = memory_order::seq_cst) const noexcept
+        requires(!__isconst && __pointer) {
+        if consteval {
+            auto r  = *ptr_;
+            *ptr_  += v;
+            return r;
+        } else {
+            return __atomic_fetch_add(
+                ptr_, v * sizeof(remove_pointer_t<value_type>), __get_order(o)
+            );
+        }
+    }
+
+    constexpr value_type
+    fetch_sub(ptrdiff_t v, memory_order o = memory_order::seq_cst) const noexcept
+        requires(!__isconst && __pointer) {
+        if consteval {
+            auto r  = *ptr_;
+            *ptr_  -= v;
+            return r;
+        } else {
+            return __atomic_fetch_sub(
+                ptr_, v * sizeof(remove_pointer_t<value_type>), __get_order(o)
+            );
+        }
+    }
+
+    constexpr value_type
+    fetch_max(value_type v, memory_order o = memory_order::seq_cst) const noexcept
+        requires(!__isconst && __pointer) {
+        if consteval {
+            auto r = *ptr_;
+            *ptr_  = std::max(*ptr_, v);
+            return r;
+        } else {
+            return __atomic_fetch_max(ptr_, v, __get_order(o));
+        }
+    }
+
+    constexpr value_type
+    fetch_min(value_type v, memory_order o = memory_order::seq_cst) const noexcept
+        requires(!__isconst && __pointer) {
+        if consteval {
+            auto r = *ptr_;
+            *ptr_  = std::min(*ptr_, v);
+            return r;
+        } else {
+            return __atomic_fetch_min(ptr_, v, __get_order(o));
+        }
+    }
+
+    constexpr void store_add(ptrdiff_t v, memory_order o = memory_order::seq_cst) const noexcept
+        requires(!__isconst && __pointer) {
+        fetch_add(v, o);
+    }
+    constexpr void store_sub(ptrdiff_t v, memory_order o = memory_order::seq_cst) const noexcept
+        requires(!__isconst && __pointer) {
+        fetch_sub(v, o);
+    }
+    constexpr void store_max(value_type v, memory_order o = memory_order::seq_cst) const noexcept
+        requires(!__isconst && __pointer) {
+        fetch_max(v, o);
+    }
+    constexpr void store_min(value_type v, memory_order o = memory_order::seq_cst) const noexcept
+        requires(!__isconst && __pointer) {
+        fetch_min(v, o);
+    }
+
+    constexpr value_type operator++(int) const noexcept requires(!__isconst && __pointer) {
+        return fetch_add(1);
+    }
+    constexpr value_type operator--(int) const noexcept requires(!__isconst && __pointer) {
+        return fetch_sub(1);
+    }
+    constexpr value_type operator++() const noexcept requires(!__isconst && __pointer) {
+        return fetch_add(1) + 1;
+    }
+    constexpr value_type operator--() const noexcept requires(!__isconst && __pointer) {
+        return fetch_sub(1) - 1;
+    }
+    constexpr value_type operator+=(ptrdiff_t v) const noexcept requires(!__isconst && __pointer) {
+        return fetch_add(v) + v;
+    }
+    constexpr value_type operator-=(ptrdiff_t v) const noexcept requires(!__isconst && __pointer) {
+        return fetch_sub(v) - v;
+    }
+
+    // --- Specializations for Floating-Point Types [atomics.ref.float] ---
+
+    constexpr value_type
+    fetch_add(value_type v, memory_order o = memory_order::seq_cst) const noexcept
+        requires(!__isconst && __floating) {
+        if consteval {
+            auto r  = *ptr_;
+            *ptr_  += v;
+            return r;
+        } else {
+            value_type old_val = load(memory_order::relaxed);
+            while (!compare_exchange_weak(old_val, old_val + v, o, memory_order::relaxed)) {}
+            return old_val;
+        }
+    }
+
+    constexpr value_type
+    fetch_sub(value_type v, memory_order o = memory_order::seq_cst) const noexcept
+        requires(!__isconst && __floating) {
+        if consteval {
+            auto r  = *ptr_;
+            *ptr_  -= v;
+            return r;
+        } else {
+            value_type old_val = load(memory_order::relaxed);
+            while (!compare_exchange_weak(old_val, old_val - v, o, memory_order::relaxed)) {}
+            return old_val;
+        }
+    }
+
+    constexpr value_type
+    fetch_max(value_type v, memory_order o = memory_order::seq_cst) const noexcept
+        requires(!__isconst && __floating) {
+        if consteval {
+            auto r = *ptr_;
+            *ptr_  = std::max(*ptr_, v);
+            return r;
+        } else {
+            value_type old_val = load(memory_order::relaxed);
+            while (!compare_exchange_weak(
+                old_val,
+                (__builtin_isnan(v) ? old_val
+                                    : (__builtin_isnan(old_val) ? v : (old_val < v ? v : old_val))),
+                o, memory_order::relaxed
+            )) {}
+            return old_val;
+        }
+    }
+
+    constexpr value_type
+    fetch_min(value_type v, memory_order o = memory_order::seq_cst) const noexcept
+        requires(!__isconst && __floating) {
+        if consteval {
+            auto r = *ptr_;
+            *ptr_  = std::min(*ptr_, v);
+            return r;
+        } else {
+            value_type old_val = load(memory_order::relaxed);
+            while (!compare_exchange_weak(
+                old_val,
+                (__builtin_isnan(v) ? old_val
+                                    : (__builtin_isnan(old_val) ? v : (v < old_val ? v : old_val))),
+                o, memory_order::relaxed
+            )) {}
+            return old_val;
+        }
+    }
+
+    constexpr value_type
+    fetch_fmaximum(value_type v, memory_order o = memory_order::seq_cst) const noexcept
+        requires(!__isconst && __floating) {
+        value_type old_val = load(memory_order::relaxed);
+        while (!compare_exchange_weak(
+            old_val,
+            (__builtin_isnan(old_val) || __builtin_isnan(v)
+                 ? (__builtin_isnan(old_val) ? old_val : v)
+                 : (old_val < v ? v : old_val)),
+            o, memory_order::relaxed
+        )) {}
+        return old_val;
+    }
+
+    constexpr value_type
+    fetch_fminimum(value_type v, memory_order o = memory_order::seq_cst) const noexcept
+        requires(!__isconst && __floating) {
+        value_type old_val = load(memory_order::relaxed);
+        while (!compare_exchange_weak(
+            old_val,
+            (__builtin_isnan(old_val) || __builtin_isnan(v)
+                 ? (__builtin_isnan(old_val) ? old_val : v)
+                 : (v < old_val ? v : old_val)),
+            o, memory_order::relaxed
+        )) {}
+        return old_val;
+    }
+
+    constexpr value_type
+    fetch_fmaximum_num(value_type v, memory_order o = memory_order::seq_cst) const noexcept
+        requires(!__isconst && __floating) {
+        return fetch_max(v, o);
+    }
+
+    constexpr value_type
+    fetch_fminimum_num(value_type v, memory_order o = memory_order::seq_cst) const noexcept
+        requires(!__isconst && __floating) {
+        return fetch_min(v, o);
+    }
+
+    constexpr void store_add(value_type v, memory_order o = memory_order::seq_cst) const noexcept
+        requires(!__isconst && __floating) {
+        fetch_add(v, o);
+    }
+    constexpr void store_sub(value_type v, memory_order o = memory_order::seq_cst) const noexcept
+        requires(!__isconst && __floating) {
+        fetch_sub(v, o);
+    }
+    constexpr void store_max(value_type v, memory_order o = memory_order::seq_cst) const noexcept
+        requires(!__isconst && __floating) {
+        fetch_max(v, o);
+    }
+    constexpr void store_min(value_type v, memory_order o = memory_order::seq_cst) const noexcept
+        requires(!__isconst && __floating) {
+        fetch_min(v, o);
+    }
+    constexpr void
+    store_fmaximum(value_type v, memory_order o = memory_order::seq_cst) const noexcept
+        requires(!__isconst && __floating) {
+        fetch_fmaximum(v, o);
+    }
+    constexpr void
+    store_fminimum(value_type v, memory_order o = memory_order::seq_cst) const noexcept
+        requires(!__isconst && __floating) {
+        fetch_fminimum(v, o);
+    }
+    constexpr void
+    store_fmaximum_num(value_type v, memory_order o = memory_order::seq_cst) const noexcept
+        requires(!__isconst && __floating) {
+        fetch_fmaximum_num(v, o);
+    }
+    constexpr void
+    store_fminimum_num(value_type v, memory_order o = memory_order::seq_cst) const noexcept
+        requires(!__isconst && __floating) {
+        fetch_fminimum_num(v, o);
+    }
+
+    constexpr value_type operator+=(value_type v) const noexcept requires(!__isconst && __floating)
+    {
+        return fetch_add(v) + v;
+    }
+    constexpr value_type operator-=(value_type v) const noexcept requires(!__isconst && __floating)
+    {
+        return fetch_sub(v) - v;
+    }
+};
+
+// Deduction guide for atomic_ref
+template<class T> atomic_ref(T&) -> atomic_ref<T>;
 
 }  // namespace std

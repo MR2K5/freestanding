@@ -1,4 +1,7 @@
 #pragma once
 
+#include <__memory/algorithms.hpp>
+#include <__memory/allocator.hpp>
 #include <__memory/base.hpp>
+#include <__memory/ptr_adapt.hpp>
 #include <__memory/unique_ptr.hpp>

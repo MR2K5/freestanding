@@ -7,7 +7,7 @@
 
 namespace std {
 
-namespace detail {
+namespace __detail {
 template<class T> struct ptr_traits_elem {};
 
 template<class T> requires requires { typename T::element_type; } struct ptr_traits_elem<T> {
@@ -21,12 +21,12 @@ struct ptr_traits_elem<SomePointer<T, Args...>> {
 };
 
 template<class Ptr> concept has_elem_type = requires { typename ptr_traits_elem<Ptr>::type; };
-}  // namespace detail
+}  // namespace __detail
 
 template<class Ptr> struct pointer_traits {};
-template<class Ptr> requires detail::has_elem_type<Ptr> struct pointer_traits<Ptr> {
+template<class Ptr> requires __detail::has_elem_type<Ptr> struct pointer_traits<Ptr> {
     using pointer         = Ptr;
-    using element_type    = detail::ptr_traits_elem<Ptr>::type;
+    using element_type    =__detail::ptr_traits_elem<Ptr>::type;
     using difference_type = decltype([] {
         if constexpr (requires { typename Ptr::difference_type; }) {
             return type_identity<typename Ptr::difference_type>{};
@@ -133,10 +133,14 @@ using __pointer_of_or_t = decltype([] {
     }
 }())::type;
 
-template<class To, class From>
-requires(sizeof(To) == sizeof(From)) && is_trivially_copyable_v<To> && is_trivially_copyable_v<From>
-[[nodiscard]] constexpr To bit_cast(From const& from) noexcept {
-    return __builtin_bit_cast(To, from);
+template<size_t N, class T> constexpr T* assume_aligned(T* p) noexcept {
+    return __builtin_assume_aligned(p, N);
 }
+
+template<size_t Alignment, class T> inline bool is_sufficiently_aligned(T* ptr) noexcept {
+    return __builtin_is_aligned(ptr, Alignment);
+}
+
+// allocator_arg_t in <utility>
 
 }  // namespace std

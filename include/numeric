@@ -1,0 +1,131 @@
+#pragma once
+
+#include <__ranges/core.hpp>
+#include <__ranges/result_types.hpp>
+#include <bit>
+#include <concepts>
+#include <type_traits>
+#include <utility>
+
+namespace std {
+
+template<class M, class N> constexpr common_type_t<M, N> gcd(M m, N n) noexcept {
+    static_assert(integral<M> && integral<N>);
+    using Common   = std::common_type_t<M, N>;
+    using Unsigned = std::make_unsigned_t<Common>;
+
+    // 1. Take absolute values in unsigned space (safe from signed overflow)
+    Unsigned a = (m < 0) ? (0 - static_cast<Unsigned>(m)) : static_cast<Unsigned>(m);
+    Unsigned b = (n < 0) ? (0 - static_cast<Unsigned>(n)) : static_cast<Unsigned>(n);
+
+    if (a == 0) return static_cast<Common>(b);
+    if (b == 0) return static_cast<Common>(a);
+
+    // 2. Extract shared power of 2: gcd(2^k * u, 2^k * v) = 2^k * gcd(u, v)
+    int shift = std::countr_zero(a | b);
+
+    // 3. Strip trailing zeros from 'a'
+    a >>= std::countr_zero(a);
+
+    // 4. Binary reduction loop
+    do {
+        b >>= std::countr_zero(b);
+        if (a > b) { std::swap(a, b); }
+        b -= a;  // Both 'a' and 'b' are odd, so 'b - a' is even and non-zero
+    } while (b != 0);
+
+    return static_cast<Common>(a << shift);
+}
+
+template<std::integral M, std::integral N> constexpr std::common_type_t<M, N> lcm(M m, N n) {
+    using Common   = std::common_type_t<M, N>;
+    using Unsigned = std::make_unsigned_t<Common>;
+
+    if (m == 0 || n == 0) return 0;
+
+    Unsigned a = (m < 0) ? (0 - static_cast<Unsigned>(m)) : static_cast<Unsigned>(m);
+    Unsigned b = (n < 0) ? (0 - static_cast<Unsigned>(n)) : static_cast<Unsigned>(n);
+
+    // Divide first to minimize intermediate overflow risk
+    Unsigned result = (a / std::gcd(a, b)) * b;
+    return static_cast<Common>(result);
+}
+
+template<std::integral T> requires(!std::is_same_v<std::remove_cv_t<T>, bool>)
+constexpr T midpoint(T a, T b) noexcept {
+    using U = std::make_unsigned_t<T>;
+
+    // Difference is calculated in unsigned space to prevent UB
+    if (a <= b) {
+        return a + static_cast<T>(static_cast<U>(b - a) >> 1);
+    } else {
+        return a - static_cast<T>(static_cast<U>(a - b) >> 1);
+    }
+}
+
+template<std::floating_point T> constexpr T midpoint(T a, T b) noexcept {
+    constexpr T lo = std::numeric_limits<T>::min() * 2;
+    constexpr T hi = std::numeric_limits<T>::max() / 2;
+
+    T const abs_a = (a < 0) ? -a : a;
+    T const abs_b = (b < 0) ? -b : b;
+
+    // Fast path: no overflow possible
+    if (abs_a <= hi && abs_b <= hi) { return (a + b) / 2; }
+
+    // Protect against underflow when one value is near zero/subnormal
+    if (abs_a < lo) { return a + (b / 2); }
+    if (abs_b < lo) { return (a / 2) + b; }
+
+    // Both are large numbers: scale before adding
+    return (a / 2) + (b / 2);
+}
+
+template<class T> constexpr T* midpoint(T* a, T* b) noexcept {
+    // b - a produces ptrdiff_t; integer division truncates towards zero (towards a)
+    return a + ((b - a) / 2);
+}
+
+template<integral T> constexpr T saturating_add(T x, T y) noexcept {
+    return __builtin_elementwise_add_sat(x, y);
+}
+template<integral T> constexpr T saturating_sub(T x, T y) noexcept {
+    return __builtin_elementwise_sub_sat(x, y);
+}
+template<integral T> constexpr T saturating_mul(T x, T y) noexcept {
+    return __builtin_elementwise_mul_sat(x, y);
+}
+template<integral T> constexpr T saturating_div(T x, T y) noexcept {
+    return __builtin_elementwise_div_sat(x, y);
+}
+template<integral T, integral U> constexpr T saturating_cast(U x) noexcept {
+    if (in_range<T>(x)) return static_cast<T>(x);
+
+    // 2. Value is smaller than To::min() (e.g., negative signed -> unsigned, or negative overflow)
+    if (std::cmp_less(x, std::numeric_limits<T>::min())) return std::numeric_limits<T>::min();
+
+    // 3. Value is larger than To::max()
+    return std::numeric_limits<T>::max();
+}
+
+namespace ranges {
+inline constexpr struct __iota_fn {
+    template<input_or_output_iterator O, sentinel_for<O> S, weakly_incrementable T>
+    requires indirectly_writable<O, T const&>
+    static constexpr iota_result<O, T> operator()(O first, S last, T val) {
+        while (first != last) {
+            *first = std::as_const(val);
+            ++first;
+            ++val;
+        }
+        return {std::move(first), std::move(val)};
+    }
+
+    template<weakly_incrementable T, output_range<T const&> R>
+    static constexpr ranges::iota_result<borrowed_iterator_t<R>, T> operator()(R&& r, T value) {
+        return operator()(begin(r), end(r), std::move(value));
+    }
+} iota;
+}  // namespace ranges
+
+}  // namespace std

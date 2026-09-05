@@ -1,3 +1,6 @@
+[submodule "subprojects/libmemory"]
+	path = subprojects/libmemory
+	url = https://github.com/embeddedartistry/libmemory.git
 [submodule "subprojects/tlsf"]
-	path = third-party/tlsf
+	path = subprojects/tlsf
 	url = https://github.com/mattconte/tlsf.git

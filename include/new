@@ -1,6 +1,14 @@
 #pragma once
 
+#include <__config.hpp>
 #include <cstddef>
+#include <exception>
+
+#if _STD_HAS_HEAP
+#  define _STD_HEAP_NORETURN
+#else
+#  define _STD_HEAP_NORETURN [[noreturn]]
+#endif
 
 namespace std {
 
@@ -28,35 +36,50 @@ template<class T> constexpr T* launder(T* p) noexcept {
 new_handler get_new_handler() noexcept;
 new_handler set_new_handler(new_handler h) noexcept;
 
+class bad_alloc: public exception {
+public:
+    constexpr char const* what() const noexcept override { return "bad_alloc"; }
+};
+class bad_array_new_length: public exception {
+public:
+    constexpr char const* what() const noexcept override { return "bad_array_new_length"; }
+};
+
 }  // namespace std
 
-[[nodiscard]] constexpr void* operator new(std::size_t, void* __p) noexcept {
-    return __p;
-}
-[[nodiscard]] constexpr void* operator new[](std::size_t, void* __p) noexcept {
-    return __p;
-}
+void* operator new(std::size_t size);
+void* operator new(std::size_t size, std::align_val_t alignment);
+void* operator new(std::size_t size, std::nothrow_t const&) noexcept;
+void*
+operator new(std::size_t size, std::align_val_t alignment, std::nothrow_t const&) noexcept;
 
-[[nodiscard, gnu::weak]] void* operator new(std::size_t size);
-[[nodiscard, gnu::weak]] void* operator new[](std::size_t size);
+void operator delete(void* ptr) noexcept;
+void operator delete(void* ptr, std::size_t size) noexcept;
+void operator delete(void* ptr, std::align_val_t alignment) noexcept;
+void
+operator delete(void* ptr, std::size_t size, std::align_val_t alignment) noexcept;
+void operator delete(void* ptr, std::nothrow_t const&) noexcept;
+void
+operator delete(void* ptr, std::align_val_t alignment, std::nothrow_t const&) noexcept;
 
-[[nodiscard, gnu::weak]] void* operator new(size_t size, std::align_val_t align);
-[[nodiscard, gnu::weak]] void* operator new[](size_t size, std::align_val_t align);
+void* operator new[](std::size_t size);
+void* operator new[](std::size_t size, std::align_val_t alignment);
+void* operator new[](std::size_t size, std::nothrow_t const&) noexcept;
+void*
+operator new[](std::size_t size, std::align_val_t alignment, std::nothrow_t const&) noexcept;
 
-[[nodiscard, gnu::weak]] void* operator new(std::size_t size, std::nothrow_t const&) noexcept;
-[[nodiscard, gnu::weak]] void* operator new[](std::size_t size, std::nothrow_t const&) noexcept;
+void operator delete[](void* ptr) noexcept;
+void operator delete[](void* ptr, std::size_t size) noexcept;
+void operator delete[](void* ptr, std::align_val_t alignment) noexcept;
+void
+operator delete[](void* ptr, std::size_t size, std::align_val_t alignment) noexcept;
+void operator delete[](void* ptr, std::nothrow_t const&) noexcept;
+void
+operator delete[](void* ptr, std::align_val_t alignment, std::nothrow_t const&) noexcept;
 
-[[nodiscard, gnu::weak]] void*
-operator new(std::size_t size, std::align_val_t align, std::nothrow_t const&) noexcept;
-[[nodiscard, gnu::weak]] void*
-operator new[](std::size_t size, std::align_val_t align, std::nothrow_t const&) noexcept;
+constexpr void* operator new(std::size_t size, void* ptr) noexcept;
+constexpr void* operator new[](std::size_t size, void* ptr) noexcept;
+constexpr void operator delete(void* ptr, void*) noexcept;
+constexpr void operator delete[](void* ptr, void*) noexcept;
 
-
-
-constexpr void operator delete(void*, void*) noexcept {}
-constexpr void operator delete[](void*, void*) noexcept {}
-
-[[gnu::weak]] void operator delete(void* ptr) noexcept;
-[[gnu::weak]] void operator delete[](void* ptr) noexcept;
-[[gnu::weak]] void operator delete(void* ptr, std::size_t size) noexcept;  // C++14 Sized delete
-[[gnu::weak]] void operator delete[](void* ptr, std::size_t size) noexcept;
+#undef _STD_HEAP_NORETURN

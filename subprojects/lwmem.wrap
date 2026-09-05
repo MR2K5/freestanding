@@ -1,8 +1,0 @@
-[wrap-git]
-url = https://github.com/MaJerle/lwmem.git
-revision = HEAD
-depth = 1
-method = cmake
-
-[provide]
-lwmem = lwmem_dep

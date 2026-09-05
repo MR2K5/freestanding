@@ -1,7 +1,10 @@
 #pragma once
 
 #include <__iterator/adaptors.hpp>
+#include <__iterator/common_iterator.hpp>
 #include <__iterator/const_iterator.hpp>
+#include <__iterator/counted_iterator.hpp>
+#include <__iterator/insert_iter.hpp>
 #include <__iterator/iter_move.hpp>
 #include <__iterator/iter_swap.hpp>
 #include <__iterator/operators.hpp>

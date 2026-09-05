@@ -4,8 +4,87 @@
 
 namespace std {
 
-using ::memcpy;
-using ::memmove;
-using ::memset;
-
+inline void* memcpy(void* __restrict s1, void const* __restrict s2, size_t n) noexcept {
+    return __builtin_memcpy(s1, s2, n);
 }
+inline void* memccpy(void* __restrict s1, void const* __restrict s2, int c, size_t n) noexcept {
+    return ::memccpy(s1, s2, c, n);
+}
+inline void* memmove(void* s1, void const* s2, size_t n) noexcept {
+    return __builtin_memmove(s1, s2, n);
+}
+inline char* strcpy(char* __restrict s1, char const* __restrict s2) noexcept {
+    return __builtin_strcpy(s1, s2);
+}
+inline char* strncpy(char* __restrict s1, char const* __restrict s2, size_t n) noexcept {
+    return __builtin_strncpy(s1, s2, n);
+}
+// inline char* strdup(char const* s) noexcept {
+//     return __builtin_strdup(s);
+// }
+// inline char* strndup(char const* s, size_t size) noexcept {
+//     return __builtin_strndup(s, size);
+// }
+inline char* strcat(char* s1, char const* s2) noexcept {
+    return __builtin_strcat(s1, s2);
+}
+inline char* strncat(char* s1, char const* s2, size_t n) noexcept {
+    return __builtin_strncat(s1, s2, n);
+}
+inline int memcmp(void const* s1, void const* s2, size_t n) noexcept {
+    return __builtin_memcmp(s1, s2, n);
+}
+inline int strcmp(char const* s1, char const* s2) noexcept {
+    return __builtin_strcmp(s1, s2);
+}
+inline int strncmp(char const* s1, char const* s2, size_t n) noexcept {
+    return __builtin_strncmp(s1, s2, n);
+}
+inline void const* memchr(void const* s, int c, size_t n) noexcept {
+    return __builtin_memchr(s, c, n);
+}
+inline void* memchr(void* s, int c, size_t n) noexcept {
+    return __builtin_memchr(s, c, n);
+}
+inline char const* strchr(char const* s, int c) noexcept {
+    return __builtin_strchr(s, c);
+}
+inline char* strchr(char* s, int c) noexcept {
+    return __builtin_strchr(s, c);
+}
+inline size_t strcspn(char const* s1, char const* s2) noexcept {
+    return __builtin_strcspn(s1, s2);
+}
+inline char const* strpbrk(char const* s1, char const* s2) noexcept {
+    return __builtin_strpbrk(s1, s2);
+}
+inline char* strpbrk(char* s1, char const* s2) noexcept {
+    return __builtin_strpbrk(s1, s2);
+}
+inline char const* strrchr(char const* s, int c) noexcept {
+    return __builtin_strrchr(s, c);
+}
+inline char* strrchr(char* s, int c) noexcept {
+    return __builtin_strrchr(s, c);
+}
+inline size_t strspn(char const* s1, char const* s2) noexcept {
+    return __builtin_strspn(s1, s2);
+}
+inline char const* strstr(char const* s1, char const* s2) noexcept {
+    return __builtin_strstr(s1, s2);
+}
+inline char* strstr(char* s1, char const* s2) noexcept {
+    return __builtin_strstr(s1, s2);
+}
+inline char* strtok(char* s1, char const* s2) {
+    return ::strtok(s1, s2);
+}
+inline void* memset(void* s, int c, size_t n) noexcept {
+    return __builtin_memset(s, c, n);
+}
+// inline void* memset_explicit(void* s, int c, size_t n) noexcept {return }
+inline size_t strlen(char const* s) noexcept {
+    return __builtin_strlen(s);
+}
+
+}  // namespace std

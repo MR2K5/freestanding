@@ -6,7 +6,13 @@ namespace std {
 class type_info {
 public:
     virtual ~type_info();
-    bool operator==(type_info const&) const noexcept;
+    constexpr bool operator==(type_info const& o) const noexcept {
+        if consteval {
+            return this == &o;
+        } else {
+            return __type_name == o.__type_name;
+        }
+    }
     // bool operator!=(type_info const&) const;
     bool before(type_info const&) const noexcept;
     char const* name() const noexcept;

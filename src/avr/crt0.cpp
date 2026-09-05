@@ -17,11 +17,12 @@ extern "C" [[gnu::naked]] void _start() {
     // Enable stack
     asm volatile(
         R"asm(
+        clr r1
+        out 0x3f, r1
         ldi r16, hi8(__stack_top)
         out 0x3E, r16
         ldi r16, lo8(__stack_top)
         out 0x3D, r16
-        clr r1
         jmp _start2)asm"
     );
 }
@@ -32,38 +33,42 @@ extern "C" [[gnu::used]] void _start2() {
 
     // __libc_init_array();
 
+    asm volatile("sei");
     int r = main();
-    _Exit(r);
+    std::exit(r);
 }
 
 extern "C" {
 
-[[gnu::interrupt, gnu::used]] void default_interrupt_handler() {}
+[[gnu::interrupt, gnu::used, gnu::naked]] void default_interrupt_handler() {
+    asm volatile("reti");
+}
 
-[[gnu::weak, gnu::interrupt, gnu::alias("default_interrupt_handler")]] void irq_int0();
-[[gnu::weak, gnu::interrupt, gnu::alias("default_interrupt_handler")]] void irq_int1();
-[[gnu::weak, gnu::interrupt, gnu::alias("default_interrupt_handler")]] void irq_pcint0();
-[[gnu::weak, gnu::interrupt, gnu::alias("default_interrupt_handler")]] void irq_pcint1();
-[[gnu::weak, gnu::interrupt, gnu::alias("default_interrupt_handler")]] void irq_pcint2();
-[[gnu::weak, gnu::interrupt, gnu::alias("default_interrupt_handler")]] void irq_wdt();
-[[gnu::weak, gnu::interrupt, gnu::alias("default_interrupt_handler")]] void irq_timer2_compa();
-[[gnu::weak, gnu::interrupt, gnu::alias("default_interrupt_handler")]] void irq_timer2_compb();
-[[gnu::weak, gnu::interrupt, gnu::alias("default_interrupt_handler")]] void irq_timer2_ovf();
-[[gnu::weak, gnu::interrupt, gnu::alias("default_interrupt_handler")]] void irq_timer1_compa();
-[[gnu::weak, gnu::interrupt, gnu::alias("default_interrupt_handler")]] void irq_timer1_compb();
-[[gnu::weak, gnu::interrupt, gnu::alias("default_interrupt_handler")]] void irq_timer1_ovf();
-[[gnu::weak, gnu::interrupt, gnu::alias("default_interrupt_handler")]] void irq_timer0_compa();
-[[gnu::weak, gnu::interrupt, gnu::alias("default_interrupt_handler")]] void irq_timer0_compb();
-[[gnu::weak, gnu::interrupt, gnu::alias("default_interrupt_handler")]] void irq_timer0_ovf();
-[[gnu::weak, gnu::interrupt, gnu::alias("default_interrupt_handler")]] void irq_spi_stc();
-[[gnu::weak, gnu::interrupt, gnu::alias("default_interrupt_handler")]] void irq_usart_rx();
-[[gnu::weak, gnu::interrupt, gnu::alias("default_interrupt_handler")]] void irq_usart_udre();
-[[gnu::weak, gnu::interrupt, gnu::alias("default_interrupt_handler")]] void irq_usart_tx();
-[[gnu::weak, gnu::interrupt, gnu::alias("default_interrupt_handler")]] void irq_adc();
-[[gnu::weak, gnu::interrupt, gnu::alias("default_interrupt_handler")]] void irq_ee_ready();
-[[gnu::weak, gnu::interrupt, gnu::alias("default_interrupt_handler")]] void irq_analog_comp();
-[[gnu::weak, gnu::interrupt, gnu::alias("default_interrupt_handler")]] void irq_twi();
-[[gnu::weak, gnu::interrupt, gnu::alias("default_interrupt_handler")]] void irq_spm_ready();
+[[gnu::weak, gnu::alias("default_interrupt_handler")]] void irq_int0();
+[[gnu::weak, gnu::alias("default_interrupt_handler")]] void irq_int1();
+[[gnu::weak, gnu::alias("default_interrupt_handler")]] void irq_pcint0();
+[[gnu::weak, gnu::alias("default_interrupt_handler")]] void irq_pcint1();
+[[gnu::weak, gnu::alias("default_interrupt_handler")]] void irq_pcint2();
+[[gnu::weak, gnu::alias("default_interrupt_handler")]] void irq_wdt();
+[[gnu::weak, gnu::alias("default_interrupt_handler")]] void irq_timer2_compa();
+[[gnu::weak, gnu::alias("default_interrupt_handler")]] void irq_timer2_compb();
+[[gnu::weak, gnu::alias("default_interrupt_handler")]] void irq_timer2_ovf();
+[[gnu::weak, gnu::alias("default_interrupt_handler")]] void irq_timer1_capt();
+[[gnu::weak, gnu::alias("default_interrupt_handler")]] void irq_timer1_compa();
+[[gnu::weak, gnu::alias("default_interrupt_handler")]] void irq_timer1_compb();
+[[gnu::weak, gnu::alias("default_interrupt_handler")]] void irq_timer1_ovf();
+[[gnu::weak, gnu::alias("default_interrupt_handler")]] void irq_timer0_compa();
+[[gnu::weak, gnu::alias("default_interrupt_handler")]] void irq_timer0_compb();
+[[gnu::weak, gnu::alias("default_interrupt_handler")]] void irq_timer0_ovf();
+[[gnu::weak, gnu::alias("default_interrupt_handler")]] void irq_spi_stc();
+[[gnu::weak, gnu::alias("default_interrupt_handler")]] void irq_usart_rx();
+[[gnu::weak, gnu::alias("default_interrupt_handler")]] void irq_usart_udre();
+[[gnu::weak, gnu::alias("default_interrupt_handler")]] void irq_usart_tx();
+[[gnu::weak, gnu::alias("default_interrupt_handler")]] void irq_adc();
+[[gnu::weak, gnu::alias("default_interrupt_handler")]] void irq_ee_ready();
+[[gnu::weak, gnu::alias("default_interrupt_handler")]] void irq_analog_comp();
+[[gnu::weak, gnu::alias("default_interrupt_handler")]] void irq_twi();
+[[gnu::weak, gnu::alias("default_interrupt_handler")]] void irq_spm_ready();
 }
 
 [[gnu::section(".vectors"), gnu::naked, gnu::used]] static void vectors() {
@@ -78,6 +83,7 @@ extern "C" {
     jmp irq_timer2_compa
     jmp irq_timer2_compb
     jmp irq_timer2_ovf
+    jmp irq_timer1_capt
     jmp irq_timer1_compa
     jmp irq_timer1_compb
     jmp irq_timer1_ovf

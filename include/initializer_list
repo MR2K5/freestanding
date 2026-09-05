@@ -23,6 +23,8 @@ public:
     constexpr size_type size() const noexcept { return _M_len; }
     constexpr iterator begin() const noexcept { return _M_array; }
     constexpr iterator end() const noexcept { return _M_array + _M_len; }
+    constexpr _E const* data() const noexcept { return _M_array; }
+    constexpr bool empty() const noexcept { return size() == 0; }
 };
 
 // Custom non-member begin/end overloads to support range-based for loops

@@ -395,9 +395,7 @@ __pointer_to_member_type_info::~__pointer_to_member_type_info() = default;
 namespace std {
 
 type_info::~type_info() = default;
-bool type_info::operator==(type_info const& o) const noexcept {
-    return __type_name == o.__type_name;
-}
+
 bool type_info::before(type_info const& o) const noexcept {
     return __type_name < o.__type_name;
 }

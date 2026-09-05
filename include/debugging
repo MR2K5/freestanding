@@ -1,0 +1,14 @@
+#pragma once
+
+namespace std {
+
+[[gnu::weak]] bool is_debugger_present() noexcept;
+
+[[gnu::artificial, gnu::always_inline]] inline void breakpoint() noexcept {
+    __builtin_debugtrap();
+}
+[[gnu::artificial, gnu::always_inline]] inline void breakpoint_if_debugging() noexcept {
+    if (is_debugger_present()) __builtin_debugtrap();
+}
+
+}  // namespace std

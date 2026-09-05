@@ -6,11 +6,13 @@
 #include <utility>
 
 namespace avr {
+using std::byte;
 
 struct interrupt_guard {
-    explicit interrupt_guard() noexcept { asm volatile("cli" : : : "memory"); }
+    std::byte sreg;
+    explicit interrupt_guard() noexcept { asm volatile("in %0, 0x3f\ncli" : "=&r"(sreg) : : "cc"); }
 
-    ~interrupt_guard() { asm volatile("sei" : : : "memory"); }
+    ~interrupt_guard() { asm volatile("out 0x3f, %0" : : "r"(sreg) : "cc"); }
 };
 
 struct regfile_t {

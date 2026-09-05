@@ -6,7 +6,7 @@
 #include <compare>
 #include <concepts>
 #include <cstddef>
-#include <functional>
+#include <__functional/core.hpp>
 #include <type_traits>
 #include <utility>
 
@@ -297,5 +297,12 @@ template<class T, class D> requires is_swappable_v<D>
 constexpr void swap(unique_ptr<T, D>& x, unique_ptr<T, D>& y) noexcept {
     x.swap(y);
 }
+
+template<class T, class Del> requires is_constructible_v<hash<typename unique_ptr<T, Del>::pointer>>
+struct hash<unique_ptr<T, Del>> {
+    static constexpr size_t operator()(unique_ptr<T, Del> t) noexcept {
+        return __detail::__do_hash(t.get());
+    }
+};
 
 }  // namespace std

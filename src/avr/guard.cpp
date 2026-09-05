@@ -17,7 +17,7 @@ int __cxa_guard_acquire(std::int64_t* guard_object) {
     if (init_in_progress) {
         // Triggers a call to __throw_runtime_error() or an internal abort trap
         // __throw_recursive_init_exception();
-        std::_exit();
+        std::_Exit(1);
     }
 
     // 3. Lock the gate: Mark that initialization has officially started

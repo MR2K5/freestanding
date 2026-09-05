@@ -1,0 +1,17 @@
+#pragma once
+
+#include <concepts>
+
+namespace std {
+
+template<class G>
+concept uniform_random_bit_generator =
+    invocable<G&> && unsigned_integral<invoke_result_t<G&>> && requires {
+        { G::min() } -> same_as<invoke_result_t<G&>>;
+        { G::max() } -> same_as<invoke_result_t<G&>>;
+        requires bool_constant<(G::min() < G::max())>::value;
+    };
+
+// TODO random_device for diff archs. Using special instructions.
+
+}  // namespace std

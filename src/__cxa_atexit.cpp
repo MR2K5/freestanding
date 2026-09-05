@@ -37,5 +37,4 @@ void __cxa_finalize(void*) noexcept {
         if (entry.destructor) { entry.destructor(entry.arg); }
     }
 }
-
 }

@@ -3,7 +3,7 @@
 // IWYU pragma: private: include <iterator>
 
 #include <__memory/base.hpp>
-#include <functional>
+#include <__functional/core.hpp>
 
 #include <concepts>
 #include <cstddef>
@@ -67,7 +67,9 @@ struct bidirectional_iterator_tag: forward_iterator_tag {};
 struct random_access_iterator_tag: bidirectional_iterator_tag {};
 struct contiguous_iterator_tag: random_access_iterator_tag {};
 
-template<class T> struct iterator_traits {};
+template<class T> struct iterator_traits {
+    using __primary_template = void;
+};
 
 namespace __detail {
 
@@ -156,7 +158,7 @@ concept input_or_output_iterator = requires(I i) {
 
 template<class S, class I>
 concept sentinel_for = semiregular<S> && input_or_output_iterator<I>
-                    && detail::__weakly_equality_comparable_with<I, S>;
+                    &&__detail::__weakly_equality_comparable_with<I, S>;
 
 template<class S, class I> inline constexpr bool disable_sized_sentinel_for = false;
 
@@ -424,7 +426,7 @@ template<class T> struct __indirect_value {
 template<class I, class Proj> struct __indirect_value<__projected_impl<I, Proj>> {
     using type = invoke_result_t<Proj&, typename __indirect_value<I>::type>;
 };
-template<class T> using __indirect_value_t = __indirect_value<T>;
+template<class T> using __indirect_value_t = __indirect_value<T>::type;
 
 }  // namespace __detail
 
@@ -506,7 +508,7 @@ using iter_common_reference_t =
 template<
     class I1, class I2, class Comp,
 
-    class Proj1 = std::identity, class Proj2 = identity>
+    class Proj1 = identity, class Proj2 = identity>
 concept indirectly_comparable =
     indirect_binary_predicate<Comp, projected<I1, Proj1>, projected<I2, Proj2>>;
 

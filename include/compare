@@ -194,7 +194,7 @@ inline constexpr strong_ordering strong_ordering::equivalent{_CmpCtor{}, 0};
 inline constexpr strong_ordering strong_ordering::equal{_CmpCtor{}, 0};
 inline constexpr strong_ordering strong_ordering::greater{_CmpCtor{}, 1};
 
-namespace detail {
+namespace __detail {
 template<unsigned int> struct common_cmpcat_base {
     using type = void;
 };
@@ -210,10 +210,10 @@ template<> struct common_cmpcat_base<4u> {
 template<> struct common_cmpcat_base<6u> {
     using type = partial_ordering;
 };
-}  // namespace detail
+}  // namespace __detail
 
 template<class... Ts>
-struct common_comparison_category: detail::common_cmpcat_base<
+struct common_comparison_category:__detail::common_cmpcat_base<
                                        (0u | ...
                                         | (is_same_v<Ts, strong_ordering>    ? 0u
                                            : is_same_v<Ts, weak_ordering>    ? 4u
@@ -234,7 +234,7 @@ struct compare_three_way_result<T, U> {
 template<class T, class U = T>
 using compare_three_way_result_t = compare_three_way_result<T, U>::type;
 
-namespace detail {
+namespace __detail {
 
 template<class T, class Cat>
 concept __compare_as = same_as<common_comparison_category_t<T, Cat>, Cat>;
@@ -242,21 +242,21 @@ concept __compare_as = same_as<common_comparison_category_t<T, Cat>, Cat>;
 
 template<class T, class Cat = partial_ordering>
 concept three_way_comparable =
-    detail::__weakly_equality_comparable_with<T, T> && detail::__partially_ordered_with<T, T>
+   __detail::__weakly_equality_comparable_with<T, T> &&__detail::__partially_ordered_with<T, T>
     && requires(remove_reference_t<T> const& a, remove_reference_t<T> const& b) {
-           { a <=> b } -> detail::__compare_as<Cat>;
+           { a <=> b } ->__detail::__compare_as<Cat>;
        };
 
 template<class T, class U, class Cat = std::partial_ordering>
 concept three_way_comparable_with =
     three_way_comparable<T, Cat> && three_way_comparable<U, Cat>
-    && detail::__comparison_common_type_with<T, U>
+    &&__detail::__comparison_common_type_with<T, U>
     && three_way_comparable<
         common_reference_t<remove_reference_t<T> const&, remove_reference_t<U> const&>, Cat>
-    && detail::__weakly_equality_comparable_with<T, U> && detail::__partially_ordered_with<T, U>
+    &&__detail::__weakly_equality_comparable_with<T, U> &&__detail::__partially_ordered_with<T, U>
     && requires(remove_reference_t<T> const& t, remove_reference_t<U> const& u) {
-           { t <=> u } -> detail::__compare_as<Cat>;
-           { u <=> t } -> detail::__compare_as<Cat>;
+           { t <=> u } ->__detail::__compare_as<Cat>;
+           { u <=> t } ->__detail::__compare_as<Cat>;
        };
 
 struct compare_three_way {

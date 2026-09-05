@@ -3,6 +3,7 @@
 #include <__memory/base.hpp>
 #include <compare>
 #include <type_traits>
+#include <__functional/core.hpp>
 
 namespace std {
 
@@ -155,6 +156,13 @@ struct suspend_always {
     constexpr bool await_ready() const noexcept { return false; }
     constexpr void await_suspend(coroutine_handle<>) const noexcept {}
     constexpr void await_resume() const noexcept {}
+};
+
+template<class T>
+struct hash<coroutine_handle<T>> {
+    static constexpr size_t operator()(coroutine_handle<T> t) noexcept {
+        return hash<void*>{}(t.address());
+    }
 };
 
 }  // namespace std

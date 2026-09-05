@@ -1,7 +1,8 @@
 #pragma once
 
-#include "config.hpp"
+#include <__config.hpp>
 #include <__memory/base.hpp>
+
 #include <concepts>
 #include <exception>
 #include <initializer_list>
@@ -468,13 +469,14 @@ public:
 
     constexpr explicit operator bool() const noexcept { return has_val; }
     constexpr bool has_value() const noexcept { return has_val; }
+    constexpr bool has_error() const noexcept {return !has_value();}
 
     constexpr E& error() & noexcept { return unex; }
     constexpr E const& error() const& noexcept { return unex; }
     constexpr E&& error() && noexcept { return std::move(unex); }
     constexpr E const&& error() const&& noexcept { return std::move(unex); }
 
-#ifdef _STD_HAS_EXCEPTIONS
+#if _STD_HAS_EH
     constexpr T& value() & {
         static_assert(is_copy_constructible_v<E>);
         if (has_val) return val;
@@ -492,7 +494,7 @@ public:
         if (has_val) return std::move(val);
         throw bad_expected_access(std::as_const(error()));
     }
-    constexpr T const&& value() const&& r {
+    constexpr T const&& value() const&& {
         static_assert(
             is_copy_constructible_v<E> && is_constructible_v<E, decltype(std::move(error()))>
         );
@@ -812,10 +814,11 @@ public:
 
     constexpr explicit operator bool() const noexcept { return has_val; }
     constexpr bool has_value() const noexcept { return has_val; }
+    constexpr bool has_error() const noexcept {return !has_value();}
 
     constexpr void operator*() const noexcept {}
 
-#ifdef _STD_HAS_EXCEPTIONS
+#if _STD_HAS_EH
     constexpr void value() const& {
         static_assert(is_copy_constructible_v<E>);
         if (!has_val) throw bad_expected_access(unex);

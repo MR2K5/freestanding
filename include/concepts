@@ -19,24 +19,24 @@ concept convertible_to =
 // ============================================================================
 // 2. Fundamental Target Utilities & Exposition Concepts
 // ============================================================================
-namespace detail {
+namespace __detail {
 template<class T> concept __boolean_testable_impl = convertible_to<T, bool>;
 }
 
 template<class T>
-concept boolean_testable = detail::__boolean_testable_impl<T> && requires(T&& t) {
-    { !FWD(t) } -> detail::__boolean_testable_impl;
+concept boolean_testable =__detail::__boolean_testable_impl<T> && requires(T&& t) {
+    { !FWD(t) } ->__detail::__boolean_testable_impl;
 };
 
 // ============================================================================
 // 3. Core Language Concepts (C++20)
 // ============================================================================
-namespace detail {
+namespace __detail {
 template<class T, class U> concept __same_as_impl = is_same_v<T, U>;
 }
 
 template<class T, class U>
-concept same_as = detail::__same_as_impl<T, U> && detail::__same_as_impl<U, T>;
+concept same_as =__detail::__same_as_impl<T, U> &&__detail::__same_as_impl<U, T>;
 
 template<class T, class U>
 concept __different_from = !same_as<remove_cvref_t<T>, remove_cvref_t<U>>;
@@ -150,7 +150,7 @@ concept copy_constructible =
 // ============================================================================
 // 7. Structural Ordering & Relational Comparison Concepts (C++20)
 // ============================================================================
-namespace detail {
+namespace __detail {
 template<class T, class U>
 concept __weakly_equality_comparable_with =
     requires(remove_reference_t<T> const& t, remove_reference_t<U> const& u) {
@@ -159,11 +159,11 @@ concept __weakly_equality_comparable_with =
         { u == t } -> boolean_testable;
         { u != t } -> boolean_testable;
     };
-}  // namespace detail
+}  // namespace __detail
 
-template<class T> concept equality_comparable = detail::__weakly_equality_comparable_with<T, T>;
+template<class T> concept equality_comparable =__detail::__weakly_equality_comparable_with<T, T>;
 
-namespace detail {
+namespace __detail {
 template<class T, class U, class C = common_reference_t<T const&, U const&>>
 concept __comparison_common_type_with_impl =
     same_as<common_reference_t<T const&, U const&>, common_reference_t<U const&, T const&>>
@@ -188,24 +188,24 @@ concept __partially_ordered_with =
         { u <= t } -> boolean_testable;
         { u >= t } -> boolean_testable;
     };
-}  // namespace detail
+}  // namespace __detail
 
 template<class T, class U>
 concept equality_comparable_with =
-    equality_comparable<T> && equality_comparable<U> && detail::__comparison_common_type_with<T, U>
+    equality_comparable<T> && equality_comparable<U> &&__detail::__comparison_common_type_with<T, U>
     && equality_comparable<
         common_reference_t<remove_reference_t<T> const&, remove_reference_t<U> const&>>
-    && detail::__weakly_equality_comparable_with<T, U>;
+    &&__detail::__weakly_equality_comparable_with<T, U>;
 
 template<class T>
-concept totally_ordered = equality_comparable<T> && detail::__partially_ordered_with<T, T>;
+concept totally_ordered = equality_comparable<T> &&__detail::__partially_ordered_with<T, T>;
 
 template<class T, class U>
 concept totally_ordered_with =
     totally_ordered<T> && totally_ordered<U> && equality_comparable_with<T, U>
     && totally_ordered<
         common_reference_t<remove_reference_t<T> const&, remove_reference_t<U> const&>>
-    && detail::__partially_ordered_with<T, U>;
+    &&__detail::__partially_ordered_with<T, U>;
 
 // ============================================================================
 // 8. Core Semantic Object Design Profiling Concepts (C++20)

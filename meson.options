@@ -1,18 +1,12 @@
 option(
-    'enable_heap',
+    'has_heap',
     type: 'boolean',
     value: false,
     description: 'enable the heap',
 )
 option(
-    'has_atomics',
+    'has_threads',
     type: 'boolean',
     value: false,
-    description: 'whether atomics should be used',
-)
-option(
-    'has_exceptions',
-    type: 'boolean',
-    value: false,
-    description: 'enable exceptions',
+    description: 'whether the system is multi-core',
 )

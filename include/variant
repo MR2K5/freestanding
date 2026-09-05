@@ -1,0 +1,769 @@
+#pragma once
+
+#include <__config.hpp>
+#include <__memory/base.hpp>
+#include <array>
+#include <concepts>
+#include <cstddef>
+#include <cstdint>
+#include <exception>
+#include <initializer_list>
+#include <limits>
+#include <type_traits>
+#include <utility>
+
+#include <__functional/hash.hpp>
+
+namespace std {
+
+template<class... Ts> class variant;
+
+template<class T> struct variant_size;
+template<class T> struct variant_size<T const>: variant_size<T> {};
+template<class T> constexpr size_t variant_size_v = variant_size<T>::value;
+
+template<class... Types>
+struct variant_size<variant<Types...>>: integral_constant<size_t, sizeof...(Types)> {};
+
+template<size_t I, class T> struct variant_alternative;
+template<size_t I, class T> struct variant_alternative<I, T const>: variant_alternative<I, T> {};
+template<size_t I, class T> using variant_alternative_t = variant_alternative<I, T>::type;
+
+template<size_t I, class... Types> struct variant_alternative<I, variant<Types...>> {
+    using type = Types...[I];
+};
+
+inline constexpr size_t variant_npos = -1;
+
+class bad_variant_access: public exception {
+public:
+    // see [exception] for the specification of the special member functions
+    constexpr char const* what() const noexcept override { return "bad_variant_access"; }
+};
+
+namespace __detail {
+
+template<size_t Offset, size_t Size, class... Ts> union __variant_storage {
+    static constexpr size_t left_sz  = Size / 2;
+    static constexpr size_t right_sz = (Size + 1) / 2;
+
+    using Left  = __variant_storage<Offset, left_sz, Ts...>;
+    using Right = __variant_storage<Offset + left_sz, right_sz, Ts...>;
+
+    Left left_;
+    Right right_;
+
+    template<size_t I2> constexpr Ts...[I2]* __get_by_idx() noexcept {
+        if constexpr (I2 >= Offset && I2 < Offset + left_sz) {
+            return left_.template __get_by_idx<I2>();
+        } else if constexpr (I2 >= Offset + left_sz && I2 < Offset + Size) {
+            return right_.template __get_by_idx<I2>();
+        } else {
+            static_assert(false);
+        }
+    }
+        template<size_t I2> constexpr Ts...[I2] const* __get_by_idx() const noexcept {
+        if constexpr (I2 >= Offset && I2 < Offset + left_sz) {
+            return left_.template __get_by_idx<I2>();
+        } else if constexpr (I2 >= Offset + left_sz && I2 < Offset + Size) {
+            return right_.template __get_by_idx<I2>();
+        } else {
+            static_assert(false);
+        }
+    }
+
+    constexpr __variant_storage() noexcept {}
+    constexpr ~__variant_storage() {}
+    constexpr ~__variant_storage() requires(is_trivially_destructible_v<Ts> && ...) = default;
+};
+
+template<size_t Off, class... Ts> union __variant_storage<Off, 1, Ts...> {
+    Ts...[Off] value_;
+
+    template<size_t I2> constexpr Ts...[I2] const* __get_by_idx() const noexcept {
+        static_assert(Off == I2);
+        return std::addressof(value_);
+    }
+    template<size_t I2> constexpr Ts...[I2]* __get_by_idx() noexcept {
+        static_assert(Off == I2);
+        return std::addressof(value_);
+    }
+
+    constexpr __variant_storage() noexcept {}
+    constexpr ~__variant_storage() {}
+    constexpr ~__variant_storage() requires(is_trivially_destructible_v<Ts> && ...) = default;
+};
+
+template<size_t N>
+using __variant_size_type = conditional_t<(N > numeric_limits<uint8_t>::max()), uint16_t, uint8_t>;
+
+#define _SEQ1(N)    _X((N))
+#define _SEQ2(N)    _X((N)) _X((N) + 1)
+#define _SEQ4(N)    _X((N)) _X((N) + 1) _X((N) + 2) _X((N) + 3)
+#define _SEQ16(N)   _SEQ4((N)) _SEQ4((N) + 4) _SEQ4((N) + 8) _SEQ4((N) + 12)
+#define _SEQ64(N)   _SEQ16((N)) _SEQ16((N) + 16) _SEQ16((N) + 32) _SEQ16((N) + 48)
+#define _SEQ256(N)  _SEQ64((N)) _SEQ64((N) + 64) _SEQ64((N) + 128) _SEQ64((N) + 192)
+#define _CAT(x, y)  x##y
+#define _CAT2(x, y) _CAT(x, y)
+#define _INJECT(N)  _CAT2(_SEQ, N)(0)
+
+template<size_t N> consteval auto __variant_index_scale(size_t const (&arr)[N]) {
+    std::array<size_t, N> res{};
+    for (size_t i = 0; i < N; ++i) {
+        res[i] = 1;
+        for (size_t j = 0; j < i; ++j) { res[i] *= arr[j]; }
+    }
+    return res;
+}
+
+struct __deduce_return {};
+
+template<size_t... Is, class F, class... Vs>
+constexpr decltype(auto) __do_variant_indexed_visit(index_sequence<Is...>, F&& f, Vs&... vs) {
+    static_assert(sizeof...(Is) > 0);
+    constexpr size_t count        = sizeof...(Is);
+    constexpr size_t sizes[count] = {variant_size_v<remove_cvref_t<Vs>>...};
+    constexpr size_t total_size   = (sizes[Is] * ...);
+    constexpr auto scales         = __variant_index_scale(sizes);
+    // constexpr size_t deduce       = is_same_v<R, __deduce_return>;
+    // constexpr bool is_void        = is_void_v<R>;
+    // using Return = conditional_t<deduce, decltype(declval<F>()(index_sequence<Is - Is...>())),
+    // R>;
+    using Return = decltype(declval<F>()(index_sequence<Is - Is...>()));
+
+    [[unlikely]] if ((vs.valueless_by_exception() || ...)) { _THROW(bad_variant_access()); }
+
+    size_t const index = ((vs.__index() * scales[Is]) + ...);
+
+    // if constexpr (deduce || !is_void) {                                                    \
+    //     using R_ =                                                                         \
+    //         decltype(declval<F>()(index_sequence<((N / scales[Is]) % sizes[Is])...>()));   \
+    //     if constexpr (deduce)                                                              \
+    //     else                                                                               \
+    //     static_assert(is_convertible_v<R_, Return>);                                   \
+    // }                                                                                      \
+
+#define _X(N_)                                                                                     \
+    case Base + N_: {                                                                              \
+        constexpr size_t N = Base + (N_);                                                          \
+        if constexpr (N < total_size) {                                                            \
+            using R_ = decltype(FWD(f)(index_sequence<((N / scales[Is]) % sizes[Is])...>()));      \
+            static_assert(is_same_v<Return, R_>);                                                  \
+            return std::forward<F>(f)(index_sequence<((N / scales[Is]) % sizes[Is])...>());        \
+        } else {                                                                                   \
+            std::unreachable();                                                                    \
+        }                                                                                          \
+    }
+#define _SWITCH_LEN 256
+
+    auto recursive = [&]<size_t Base = 0> [[gnu::always_inline]] (this auto& self) {
+        switch (index) {
+            _INJECT(_SWITCH_LEN)
+        default:
+            if constexpr (Base + _SWITCH_LEN < total_size) {
+                [[clang::musttail]] return self.template operator()<Base + _SWITCH_LEN>();
+            } else {
+                std::unreachable();
+            }
+        }
+    };
+
+#undef _SWITCH_LEN
+#undef _X
+
+    return recursive();
+}
+
+template<class Visit, class... Vs> requires(sizeof...(Vs) > 0)
+constexpr decltype(auto) __indexed_visit(Visit&& vis, Vs&&... vs) {
+    return __do_variant_indexed_visit(index_sequence_for<Vs...>(), FWD(vis), vs...);
+}
+template<class From, class T, size_t I> struct __variant_overload_leaf {
+    integral_constant<size_t, I> operator()(T) const requires requires(From&& t) {
+        [](T(&&)[1]) {
+        }({FWD(t)});
+    };
+};
+
+template<class, class, class... Ts> struct __variant_overload_set;
+template<class From, size_t... Is, class... Ts>
+struct __variant_overload_set<From, index_sequence<Is...>, Ts...>
+    : __variant_overload_leaf<From, Ts, Is>... {
+    using __variant_overload_leaf<From, Ts, Is>::operator()...;
+};
+
+template<class... Ts> constexpr auto&& __as_variant(variant<Ts...>& var) {
+    return var;
+}
+template<class... Ts> constexpr auto&& __as_variant(variant<Ts...> const& var) {
+    return var;
+}
+template<class... Ts> constexpr auto&& __as_variant(variant<Ts...>&& var) {
+    return std::move(var);
+}
+template<class... Ts> constexpr auto&& __as_variant(variant<Ts...> const&& var) {
+    return std::move(var);
+}
+
+}  // namespace __detail
+
+template<class Vis, class... Vars>
+requires(requires(Vars&& v) { __detail::__as_variant(v); } && ...)
+constexpr decltype(auto) visit(Vis&& vis, Vars&&... vars) {
+    auto wrap = [&]<size_t... Is> [[gnu::always_inline, gnu::artificial]] (
+                    index_sequence<Is...>
+                ) -> decltype(auto) {
+        return std::invoke(
+            FWD(vis), std::forward_like<Vars>(*__detail::__as_variant(vars).template __get<Is>())...
+        );
+    };
+    return __detail::__do_variant_indexed_visit(
+        index_sequence_for<Vars...>(), wrap, __detail::__as_variant(vars)...
+    );
+}
+
+template<class R, class Vis, class... Vars>
+requires(requires(Vars&& v) { __detail::__as_variant(v); } && ...)
+constexpr R visit(Vis&& vis, Vars&&... vars) {
+    auto wrap =
+        [&]<size_t... Is> [[gnu::always_inline, gnu::artificial]] (index_sequence<Is...>) -> R {
+        return std::invoke_r<R>(
+            FWD(vis), std::forward_like<Vars>(*__detail::__as_variant(vars).template __get<Is>())...
+        );
+    };
+    return __detail::__do_variant_indexed_visit(
+        index_sequence_for<Vars...>(), wrap, __detail::__as_variant(vars)...
+    );
+}
+
+template<class... Ts> class variant {
+    static constexpr size_t Size = sizeof...(Ts);
+    static_assert(Size < numeric_limits<uint16_t>::max(), "Variant has a max type limit");
+    using size_type = __detail::__variant_size_type<Size>;
+
+    __detail::__variant_storage<0, Size, Ts...> storage_;
+    size_type active_;
+
+public:
+    template<size_t I> constexpr Ts...[I]* __get() noexcept {
+        if consteval {
+            return storage_.template __get_by_idx<I>();
+        } else {
+            return std::addressof(reinterpret_cast<__detail::__variant_storage<I, 1, Ts...>*>(&storage_)->value_);
+        }
+    }
+    template<size_t I> constexpr Ts...[I] const* __get() const noexcept {
+        if consteval {
+            return storage_.template __get_by_idx<I>();
+        } else {
+            return std::addressof(reinterpret_cast<__detail::__variant_storage<I, 1, Ts...> const*>(&storage_)->value_);
+        }
+    }
+
+    constexpr bool valueless_by_exception() const noexcept {
+        return active_ == size_type(-1);
+    }
+    constexpr size_type __index() const noexcept { return active_; }
+    constexpr size_t index() const noexcept {
+        return valueless_by_exception() ? variant_npos : __index();
+    }
+
+    constexpr variant() noexcept(is_nothrow_default_constructible_v<Ts...[0]>)
+        requires is_default_constructible_v<Ts...[0]>
+        : active_(0) {
+        std::construct_at(__get<0>());
+    };
+
+    constexpr variant(variant const&) = delete;
+    constexpr variant(variant const&) noexcept
+        requires(__c_is_trivially_copy_constructible<Ts> && ...)
+                 && (__c_is_copy_constructible<Ts> && ...) = default;
+    constexpr variant(variant const& v) noexcept((is_nothrow_copy_constructible_v<Ts> && ...))
+        requires(__c_is_copy_constructible<Ts> && ...)
+        : active_(v.active_) {
+        if (valueless_by_exception()) return;
+        __detail::__indexed_visit(
+            [&]<size_t I>(index_sequence<I>) { std::construct_at(__get<I>(), *v.__get<I>()); }, v
+        );
+    }
+
+    constexpr variant(variant&&) = delete;
+    constexpr variant(variant&&) noexcept requires(__c_is_trivially_move_constructible<Ts> && ...)
+                                                   && (__c_is_move_constructible<Ts> && ...)
+    = default;
+    constexpr variant(variant&& v) noexcept((is_nothrow_move_constructible_v<Ts> && ...))
+        requires(__c_is_move_constructible<Ts> && ...)
+        : active_(v.active_) {
+        if (valueless_by_exception()) return;
+        __detail::__indexed_visit(
+            [&]<size_t I>(index_sequence<I>) {
+                std::construct_at(__get<I>(), std::move(*v.__get<I>()));
+            },
+            v
+        );
+    }
+
+    template<class T> requires requires(T&& t) {
+        __detail::__variant_overload_set<T, make_index_sequence<Size>, Ts...>{}(FWD(t));
+    } static constexpr size_t __get_overload_idx =
+        decltype(__detail::__variant_overload_set<T, make_index_sequence<Size>, Ts...>{}(
+            declval<T>()
+        ))::value;
+
+    template<class T> requires(sizeof...(Ts) != 0) && (!is_same_v<remove_cvref_t<T>, variant>)
+                           && (!__is_specialization_of_v<in_place_type_t, remove_cvref_t<T>>)
+                           && (!__is_in_place_index_v<remove_cvref_t<T>>)
+                           && (requires { __get_overload_idx<T>; })
+                           && (is_constructible_v<Ts...[__get_overload_idx<T>], T>)
+    constexpr variant(T&& t) noexcept(is_nothrow_constructible_v<Ts...[__get_overload_idx<T>], T>)
+        : active_(__get_overload_idx<T>) {
+        std::construct_at(__get<__get_overload_idx<T>>(), FWD(t));
+    }
+
+    template<class T, class... As>
+    requires(__index_of_type_v<T, Ts...> != size_t(-1)) && is_constructible_v<T, As...>
+    constexpr explicit variant(in_place_type_t<T>, As&&... as)
+        : active_(__index_of_type_v<T, Ts...>) {
+        std::construct_at(__get<__index_of_type_v<T, Ts...>>(), FWD(as)...);
+    }
+
+    template<class T, class U, class... As>
+    requires(__index_of_type_v<T, Ts...> != size_t(-1))
+         && is_constructible_v<T, initializer_list<U>, As...>
+    constexpr explicit variant(in_place_type_t<T>, initializer_list<U> il, As&&... as)
+        : active_(__index_of_type_v<T, Ts...>) {
+        std::construct_at(__get<__index_of_type_v<T, Ts...>>(), il, FWD(as)...);
+    }
+
+    template<size_t I, class... As> requires(I < Size) && is_constructible_v<Ts...[I], As...>
+    constexpr explicit variant(in_place_index_t<I>, As&&... as): active_(I) {
+        std::construct_at(__get<I>(), FWD(as)...);
+    }
+    template<size_t I, class U, class... As>
+    requires(I < Size) && is_constructible_v<Ts...[I], initializer_list<U>, As...>
+    constexpr explicit variant(in_place_index_t<I>, initializer_list<U> il, As&&... as)
+        : active_(I) {
+        std::construct_at(__get<I>(), il, FWD(as)...);
+    }
+
+    constexpr ~variant() { __clear(); }
+    constexpr ~variant() requires(__c_is_trivially_destructible<Ts> && ...) = default;
+
+    constexpr variant& operator=(variant const&) = delete;
+    constexpr variant& operator=(variant const&)
+        requires(__c_is_copy_constructible<Ts> && ...) && (__c_is_copy_assignable<Ts> && ...)
+                 && (__c_is_trivially_copy_constructible<Ts> && ...)
+                 && (__c_is_trivially_copy_assignable<Ts> && ...)
+                 && (__c_is_trivially_destructible<Ts> && ...) = default;
+    constexpr variant& operator=(variant const& v) noexcept(
+        (is_nothrow_copy_constructible_v<Ts> && ...) && (is_nothrow_copy_assignable_v<Ts> && ...)
+    ) requires(__c_is_copy_constructible<Ts> && ...) && (__c_is_copy_assignable<Ts> && ...) {
+        if (valueless_by_exception() && v.valueless_by_exception()) return *this;
+        if (!valueless_by_exception() && v.valueless_by_exception()) {
+            __clear();
+            return *this;
+        }
+        if (__index() == v.__index()) {
+            __detail::__indexed_visit(
+                [&]<size_t I>(index_sequence<I>) { *__get<I>() = *v.__get<I>(); }, v
+            );
+            active_ = v.active_;
+            return *this;
+        }
+
+        bool done = __detail::__indexed_visit(
+            [&]<size_t I>(index_sequence<I>) {
+                if constexpr (
+                    is_nothrow_copy_constructible_v<Ts...[I]>
+                    || !is_nothrow_move_constructible_v<Ts...[I]>
+                ) {
+                    emplace<I>(*v.__get<I>());
+                    return true;
+                }
+                return false;
+            },
+            v
+        );
+        if (!done) *this = variant(v);
+        return *this;
+    }
+
+    constexpr variant& operator=(variant&&) = delete;
+    constexpr variant& operator=(variant&&)
+        requires(__c_is_move_constructible<Ts> && ...) && (__c_is_move_assignable<Ts> && ...)
+                 && (__c_is_trivially_move_constructible<Ts> && ...)
+                 && (__c_is_trivially_move_assignable<Ts> && ...)
+                 && (__c_is_trivially_destructible<Ts> && ...) = default;
+    constexpr variant& operator=(variant&& v) noexcept(
+        (is_nothrow_move_constructible_v<Ts> && ...) && (is_nothrow_move_assignable_v<Ts> && ...)
+    ) requires(__c_is_move_constructible<Ts> && ...) && (__c_is_move_assignable<Ts> && ...) {
+        if (valueless_by_exception() && v.valueless_by_exception()) return *this;
+        if (v.valueless_by_exception()) {
+            __clear();
+            return *this;
+        }
+        if (__index() == v.__index()) {
+            __detail::__indexed_visit(
+                [&]<size_t I>(index_sequence<I>) { *__get<I>() = std::move(*v.__get<I>()); }, v
+            );
+            active_ = v.__index();
+            return *this;
+        }
+
+        __detail::__indexed_visit(
+            [&]<size_t I>(index_sequence<I>) { emplace<I>(std::move(*v.__get<I>())); }, v
+        );
+        return *this;
+    }
+
+    template<class T>
+    requires(!is_same_v<remove_cvref_t<T>, variant>) && requires { __get_overload_idx<T>; }
+         && (is_assignable_v<Ts...[__get_overload_idx<T>]&, T>)
+         && (is_constructible_v<Ts...[__get_overload_idx<T>], T>)constexpr variant&
+    operator=(T&& t) noexcept(
+        is_nothrow_assignable_v<Ts...[__get_overload_idx<T>]&, T>
+        && is_nothrow_constructible_v<Ts...[__get_overload_idx<T>], T>
+    ) {
+        constexpr auto idx = __get_overload_idx<T>;
+        if (__index() == idx) {
+            *__get<idx>() = FWD(t);
+            return *this;
+        }
+
+        if constexpr (
+            is_nothrow_constructible_v<Ts...[idx], T>
+            || !is_nothrow_move_constructible_v<Ts...[idx]>
+        ) {
+            emplace<idx>(FWD(t));
+        } else {
+            emplace<idx>(Ts...[idx](FWD(t)));
+        }
+        return *this;
+    }
+
+    template<size_t I, class... As>
+    requires (is_constructible_v<Ts...[I], As...>)
+    constexpr Ts...[I]& emplace(As&&... as) {
+        __clear();
+        std::construct_at(__get<I>(), FWD(as)...);
+        active_ = I;
+        return *__get<I>();
+    }
+
+    template<size_t I, class U, class... As>
+    requires (is_constructible_v<Ts...[I], initializer_list<U>, As...>)
+    constexpr Ts...[I]& emplace(initializer_list<U> il, As&&... as) {
+        __clear();
+        std::construct_at(__get<I>(), il, FWD(as)...);
+        active_ = I;
+        return *__get<I>();
+    }
+
+    template<class T, class... As>
+    requires requires {__get_overload_idx<T>;}
+    &&  ( is_constructible_v<T, As...>)
+    constexpr  T& emplace(As&&... as) {
+        return emplace<__get_overload_idx<T>>(FWD(as)...);
+    }
+
+    template<class T, class U, class... As> requires requires {
+        __get_overload_idx<T>;
+    } && is_constructible_v<T, initializer_list<U>, As...>
+    constexpr T& emplace(initializer_list<U> il, As&&... as) {
+        return emplace<__get_overload_idx<T>>(il, FWD(as)...);
+    }
+
+    constexpr void swap(variant& v) noexcept(
+        (is_nothrow_move_constructible_v<Ts> && ...) && (is_nothrow_swappable_v<Ts> && ...)
+    ) {
+        static_assert((is_move_constructible_v<Ts> && ...));
+        if (valueless_by_exception() && v.valueless_by_exception()) return;
+        if (valueless_by_exception()) {
+            __detail::__indexed_visit(
+                [&]<size_t I>(index_sequence<I>) {
+                    emplace<I>(std::move(*v.template __get<I>()));
+                    v.__clear();
+                },
+                v
+            );
+        } else if (v.valueless_by_exception()) {
+            __detail::__indexed_visit(
+                [&]<size_t I>(index_sequence<I>) {
+                    v.template emplace<I>(std::move(*__get<I>()));
+                    __clear();
+                },
+                *this
+            );
+        } else {
+            __detail::__indexed_visit(
+                [&]<size_t I1, size_t I2>(index_sequence<I1, I2>) {
+                    if constexpr (I1 == I2) {
+                        using std::swap;
+                        swap(*__get<I1>(), *v.__get<I2>());
+                    } else {
+                        Ts...[I1] tmp(std::move(*__get<I1>()));
+                        emplace<I2>(std::move(*v.__get<I2>()));
+                        v.emplace<I1>(std::move(tmp));
+                    }
+                },
+                *this, v
+            );
+        }
+    }
+
+    template<class Self, class Visitor>
+    constexpr decltype(auto) visit(this Self&& self, Visitor&& vis) {
+        return std::visit(FWD(vis), FWD(self));
+    }
+    template<class R, class Self, class Visitor>
+    constexpr R visit(this Self&& self, Visitor&& vis) {
+        return std::visit<R>(FWD(vis), FWD(self));
+    }
+
+private:
+    constexpr void __clear() noexcept {
+        if (!valueless_by_exception())
+            __detail::__indexed_visit(
+                [this]<size_t I>(index_sequence<I>) { std::destroy_at(__get<I>()); }, *this
+            );
+        active_ = size_type(-1);
+    }
+};
+
+template<class T, class... Ts> constexpr bool holds_alternative(variant<Ts...> const& v) noexcept {
+    static_assert(__index_of_type_v<T, Ts...> != size_t(-1));
+    return v.valueless_by_exception() ? false : v.__index() == __index_of_type_v<T, Ts...>;
+}
+
+template<size_t I, class... Ts>
+constexpr add_pointer_t<Ts... [I]> get_if(variant<Ts...>* v) noexcept {
+    static_assert(I < sizeof...(Ts));
+    if (!v) return nullptr;
+    return v->__index() == I ? v->template __get<I>() : nullptr;
+}
+
+template<size_t I, class... Ts>
+constexpr add_pointer_t<Ts... [I] const> get_if(variant<Ts...> const* v) noexcept {
+    if (!v) return nullptr;
+    static_assert(I < sizeof...(Ts));
+    return v->__index() == I ? v->template __get<I>() : nullptr;
+}
+
+template<class T, class... Types>
+constexpr add_pointer_t<T> get_if(variant<Types...>* v) noexcept {
+    constexpr auto I = __index_of_type_v<T, Types...>;
+    static_assert(I != size_t(-1));
+    return std::get_if<I>(v);
+}
+
+template<class T, class... Types>
+constexpr add_pointer_t<T const> get_if(variant<Types...> const* v) noexcept {
+    constexpr auto I = __index_of_type_v<T, Types...>;
+    static_assert(I != size_t(-1));
+    return std::get_if<I>(v);
+}
+
+#if _STD_HAS_EH
+
+template<size_t I, class... Types>
+constexpr variant_alternative_t<I, variant<Types...>>& get(variant<Types...>& v) {
+    auto p = std::get_if<I>(&v);
+    if (p) return *p;
+    throw bad_variant_access();
+}
+template<size_t I, class... Types>
+constexpr variant_alternative_t<I, variant<Types...>>&& get(variant<Types...>&& v) {
+    auto p = std::get_if<I>(&v);
+    if (p) return std::move(*p);
+    throw bad_variant_access();
+}
+template<size_t I, class... Types>
+constexpr variant_alternative_t<I, variant<Types...>> const& get(variant<Types...> const& v) {
+    auto p = std::get_if<I>(&v);
+    if (p) return *p;
+    throw bad_variant_access();
+}
+template<size_t I, class... Types>
+constexpr variant_alternative_t<I, variant<Types...>> const&& get(variant<Types...> const&& v) {
+    auto p = std::get_if<I>(&v);
+    if (p) return std::move(*p);
+    throw bad_variant_access();
+}
+
+template<class T, class... Types> constexpr T& get(variant<Types...>& v) {
+    auto p = std::get_if<T>(&v);
+    if (p) return *p;
+    throw bad_variant_access();
+}
+template<class T, class... Types> constexpr T&& get(variant<Types...>&& v) {
+    auto p = std::get_if<T>(&v);
+    if (p) return std::move(*p);
+    throw bad_variant_access();
+}
+template<class T, class... Types> constexpr T const& get(variant<Types...> const& v) {
+    auto p = std::get_if<T>(&v);
+    if (p) return *p;
+    throw bad_variant_access();
+}
+template<class T, class... Types> constexpr T const&& get(variant<Types...> const&& v) {
+    auto p = std::get_if<T>(&v);
+    if (p) return std::move(*p);
+    throw bad_variant_access();
+}
+
+#else
+
+template<size_t I, class... Types>
+constexpr variant_alternative_t<I, variant<Types...>>&
+get(variant<Types...>&) = _DELETE_NO_EXCEPTIONS;
+template<size_t I, class... Types>
+constexpr variant_alternative_t<I, variant<Types...>>&&
+get(variant<Types...>&&) = _DELETE_NO_EXCEPTIONS;
+template<size_t I, class... Types>
+constexpr variant_alternative_t<I, variant<Types...>> const&
+get(variant<Types...> const&) = _DELETE_NO_EXCEPTIONS;
+template<size_t I, class... Types>
+constexpr variant_alternative_t<I, variant<Types...>> const&&
+get(variant<Types...> const&&) = _DELETE_NO_EXCEPTIONS;
+
+template<class T, class... Types> constexpr T& get(variant<Types...>&)   = _DELETE_NO_EXCEPTIONS;
+template<class T, class... Types> constexpr T&& get(variant<Types...>&&) = _DELETE_NO_EXCEPTIONS;
+template<class T, class... Types>
+constexpr T const& get(variant<Types...> const&) = _DELETE_NO_EXCEPTIONS;
+template<class T, class... Types>
+constexpr T const&& get(variant<Types...> const&&) = _DELETE_NO_EXCEPTIONS;
+
+#endif
+
+template<class... Ts>
+constexpr void swap(variant<Ts...>& x, variant<Ts...>& y) noexcept(noexcept(x.swap(y)))
+    requires requires { x.swap(y); } {
+    x.swap(y);
+}
+
+template<class... Ts> requires(requires(Ts const& t) {
+    { t == t } -> boolean_testable;
+} && ...) constexpr bool operator==(variant<Ts...> const& x, variant<Ts...> const& y) {
+    if (x.__index() != y.__index()) return false;
+    if (x.valueless_by_exception()) return true;
+    return __detail::__indexed_visit(
+        [&]<size_t I>(index_sequence<I>) {
+            return *x.template __get<I>() == *y.template __get<I>();
+        },
+        x
+    );
+}
+
+template<class... Ts> requires(requires(Ts const& t) {
+    { t != t } -> boolean_testable;
+} && ...) constexpr bool operator!=(variant<Ts...> const& x, variant<Ts...> const& y) {
+    if (x.__index() != y.__index()) return true;
+    if (x.valueless_by_exception()) return false;
+    return __detail::__indexed_visit(
+        [&]<size_t I>(index_sequence<I>) {
+            return *x.template __get<I>() != *y.template __get<I>();
+        },
+        x
+    );
+}
+
+template<class... Ts> requires(requires(Ts const& t) {
+    { t < t } -> boolean_testable;
+} && ...) constexpr bool operator<(variant<Ts...> const& x, variant<Ts...> const& y) {
+    if (y.valueless_by_exception()) return false;
+    if (x.valueless_by_exception()) return true;
+    if (x.__index() < y.__index()) return true;
+    if (x.__index() > y.__index()) return false;
+    return __detail::__indexed_visit(
+        [&]<size_t I>(index_sequence<I>) {
+            return *x.template __get<I>() < *y.template __get<I>();
+        },
+        x
+    );
+}
+
+template<class... Ts> requires(requires(Ts const& t) {
+    { t > t } -> boolean_testable;
+} && ...) constexpr bool operator>(variant<Ts...> const& x, variant<Ts...> const& y) {
+    if (x.valueless_by_exception()) return false;
+    if (y.valueless_by_exception()) return true;
+    if (x.__index() > y.__index()) return true;
+    if (x.__index() < y.__index()) return false;
+    return __detail::__indexed_visit(
+        [&]<size_t I>(index_sequence<I>) {
+            return *x.template __get<I>() > *y.template __get<I>();
+        },
+        x
+    );
+}
+
+template<class... Ts> requires(requires(Ts const& t) {
+    { t <= t } -> boolean_testable;
+} && ...) constexpr bool operator<=(variant<Ts...> const& x, variant<Ts...> const& y) {
+    if (x.valueless_by_exception()) return true;
+    if (y.valueless_by_exception()) return false;
+    if (x.__index() < y.__index()) return true;
+    if (x.__index() > y.__index()) return false;
+    return __detail::__indexed_visit(
+        [&]<size_t I>(index_sequence<I>) {
+            return *x.template __get<I>() <= *y.template __get<I>();
+        },
+        x
+    );
+}
+template<class... Ts> requires(requires(Ts const& t) {
+    { t >= t } -> boolean_testable;
+} && ...) constexpr bool operator>=(variant<Ts...> const& x, variant<Ts...> const& y) {
+    if (y.valueless_by_exception()) return true;
+    if (x.valueless_by_exception()) return false;
+    if (x.__index() > y.__index()) return true;
+    if (x.__index() < y.__index()) return false;
+    return __detail::__indexed_visit(
+        [&]<size_t I>(index_sequence<I>) {
+            return *x.template __get<I>() >= *y.template __get<I>();
+        },
+        x
+    );
+}
+
+template<class... Types> requires(three_way_comparable<Types> && ...)
+constexpr common_comparison_category_t<compare_three_way_result_t<Types>...>
+operator<=>(variant<Types...> const& v, variant<Types...> const& w) {
+    if (v.valueless_by_exception() && w.valueless_by_exception()) return strong_ordering::equal;
+    if (v.valueless_by_exception()) return strong_ordering::less;
+    if (w.valueless_by_exception()) return strong_ordering::greater;
+    if (auto c = v.index() <=> w.index(); c != 0) return c;
+    return __detail::__indexed_visit(
+        [&]<size_t I>(index_sequence<I>) {
+            return *v.template __get<I>() <=> *w.template __get<I>();
+        },
+        v
+    );
+}
+
+template<class... Ts> requires(requires(Ts const& ts) {
+    { std::hash<Ts>()(ts) } -> same_as<size_t>;
+} && ...) struct hash<variant<Ts...>> {
+    size_t operator()(variant<Ts...> const& v) const noexcept((
+        is_nothrow_invocable_r_v<size_t, hash<remove_const_t<Ts>>, remove_const_t<Ts> const&> && ...
+    )) {
+        if (v.valueless_by_exception()) {
+            return __detail::__do_hash(-1uz);  // Fixed sentinel hash constant
+        }
+
+        return __detail::__indexed_visit(
+            [&]<size_t I>(index_sequence<I>) -> size_t {
+                size_t val_hash = std::hash<remove_cvref_t<Ts... [I]>> {
+                }(*v.template __get<I>());
+                size_t const idx_hash = __detail::__do_hash(I);
+
+                // Standard hash combination step: hash_combine(idx_hash, val_hash)
+                __detail::hash_combine(val_hash, idx_hash);
+                return val_hash;
+            },
+            v
+        );
+    }
+};
+
+}  // namespace std

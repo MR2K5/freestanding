@@ -6,5 +6,6 @@
     "cSpell.words": [
         "unex"
     ],
-    "cmake.sourceDirectory": "/home/massimo/projects/freestanding/subprojects/lwmem"
+    "cmake.sourceDirectory": "/home/massimo/projects/freestanding/subprojects/lwmem",
+    "mesonbuild.buildFolder": "build-x64"
 }

@@ -1,0 +1,49 @@
+#pragma once
+
+#include <span>
+#include <type_traits>
+
+namespace std {
+
+template<class IndexType, size_t... Extents> class extents {
+public:
+    using index_type = IndexType;
+    using size_type  = make_unsigned_t<index_type>;
+    using rank_type  = size_t;
+
+    // [mdspan.extents.obs], observers of the multidimensional index space
+    static constexpr rank_type rank() noexcept { return sizeof...(Extents); }
+    static constexpr rank_type rank_dynamic() noexcept { return __dynamic_index(rank()); }
+    static constexpr size_t static_extent(rank_type) noexcept;
+    constexpr index_type extent(rank_type) const noexcept;
+
+    // [mdspan.extents.cons], constructors
+    constexpr extents() noexcept = default;
+
+    template<class OtherIndexType, size_t... OtherExtents>
+    constexpr explicit() extents(extents<OtherIndexType, OtherExtents...> const&) noexcept;
+    template<class... OtherIndexTypes> constexpr explicit extents(OtherIndexTypes...) noexcept;
+    template<class OtherIndexType, size_t N>
+    constexpr explicit(N != rank_dynamic()) extents(span<OtherIndexType, N>) noexcept;
+    template<class OtherIndexType, size_t N>
+    constexpr explicit(N != rank_dynamic()) extents(array<OtherIndexType, N> const&) noexcept;
+
+    // [mdspan.extents.cmp], comparison operators
+    template<class OtherIndexType, size_t... OtherExtents>
+    friend constexpr bool
+    operator==(extents const&, extents<OtherIndexType, OtherExtents...> const&) noexcept;
+
+    // [mdspan.extents.expo], exposition-only helpers
+    constexpr size_t __fwd_prod_of_extents(rank_type) const noexcept;
+    constexpr size_t __rev_prod_of_extents(rank_type) const noexcept;
+    template<class OtherIndexType> static constexpr auto __index_cast(OtherIndexType&&) noexcept;
+
+private:
+    static constexpr rank_type __dynamic_index(rank_type r) noexcept {
+        assert(r <= rank());
+    }
+    static constexpr rank_type __dynamic_index_inv(rank_type) noexcept;
+    array<index_type, rank_dynamic()> __dynamic_extents{};
+};
+
+}  // namespace std

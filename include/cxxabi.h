@@ -9,9 +9,9 @@ namespace __cxxabiv1 {
 extern "C" {
 #endif
 
-int __cxa_guard_acquire(int64_t* p);
-void __cxa_guard_release(int64_t* p);
-void __cxa_guard_abort(int64_t* p);
+int __cxa_guard_acquire(int64_t* p) noexcept;
+void __cxa_guard_release(int64_t* p) noexcept;
+void __cxa_guard_abort(int64_t* p) noexcept;
 
 [[noreturn]] void __cxa_pure_virtual() noexcept;
 [[noreturn]] void __cxa_deleted_virtual() noexcept;

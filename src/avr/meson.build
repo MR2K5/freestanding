@@ -4,7 +4,6 @@ abi = library(
     sources: files(
         'divmodhi4.S',
         'divmodqi4.S',
-        'exit.S',
         'mulhi3.S',
         'mulqi3.S',
         'udivmodhi4.S',

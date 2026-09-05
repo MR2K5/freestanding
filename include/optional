@@ -1,5 +1,6 @@
 #pragma once
 
+#include <__functional/hash.hpp>
 #include <__memory/base.hpp>
 #include <compare>
 #include <concepts>
@@ -607,5 +608,48 @@ private:
 
 template<class T> movable_box(T) -> movable_box<T>;
 
+template<class T> requires is_object_v<T> class non_propagating_cache: optional<T> {
+    using B = optional<T>;
+
+public:
+    using B::B;
+    using B::operator=;
+    using B::operator*;
+    using B::operator->;
+    using B::operator bool;
+    using B::emplace;
+    using B::has_value;
+    using B::reset;
+
+    constexpr non_propagating_cache(non_propagating_cache const&) noexcept {}
+    constexpr non_propagating_cache(non_propagating_cache&& o) noexcept { o.reset(); }
+
+    constexpr non_propagating_cache& operator=(non_propagating_cache const& other) noexcept {
+        if (std::addressof(other) != this) reset();
+        return *this;
+    }
+    constexpr non_propagating_cache& operator=(non_propagating_cache&& other) noexcept {
+        reset();
+        other.reset();
+        return *this;
+    }
+    template<class I> constexpr T& __emplace_deref(I const& i) {
+        static_assert(requires { ::new T(*i); });
+        reset();
+        return emplace(*i);
+    }
+};
+
 }  // namespace __detail
+
+template<class T> struct hash<optional<T>> {
+    static constexpr size_t operator()(optional<T> const& t) {
+        if (t.has_value()) {
+            return __detail::__do_hash(*t);
+        } else {
+            return 0;
+        }
+    }
+};
+
 }  // namespace std

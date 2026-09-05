@@ -1,0 +1,174 @@
+#pragma once
+
+#include <concepts>
+#include <cstdint>
+
+namespace std {
+
+enum class endian {
+    little = __ORDER_LITTLE_ENDIAN__,
+    big    = __ORDER_BIG_ENDIAN__,
+    native = __BYTE_ORDER__
+};
+
+template<class To, class From>
+requires(sizeof(To) == sizeof(From)) && is_trivially_copyable_v<To> && is_trivially_copyable_v<From>
+[[nodiscard]] constexpr To bit_cast(From const& from) noexcept {
+    return __builtin_bit_cast(To, from);
+}
+
+template<integral T> [[nodiscard]] constexpr T byteswap(T value) noexcept {
+    // [bit.byteswap] Mandate: T must have no padding bits
+    static_assert(
+        has_unique_object_representations_v<T>,
+        "std::byteswap requires an integral type with no padding bits"
+    );
+
+    if constexpr (sizeof(T) == 1) {
+        return value;
+    } else if constexpr (sizeof(T) % 2 == 0) {
+        return __builtin_bswapg(value);
+    } else {
+        // Generic fallback for arbitrary sizes: _BitInt(256), _BitInt(512), etc.
+        struct Storage {
+            alignas(T) unsigned char bytes[sizeof(T)];
+        };
+
+        auto src = std::bit_cast<Storage>(value);
+        Storage dst{};
+        for (size_t i = 0; i < sizeof(T); ++i) { dst.bytes[i] = src.bytes[sizeof(T) - 1 - i]; }
+        return std::bit_cast<T>(dst);
+    }
+}
+
+template<unsigned_integral T> constexpr int popcount(T t) noexcept {
+    return __builtin_popcountg(t);
+}
+template<unsigned_integral T> consteval int __bit_width() noexcept {
+    return popcount(T(~T{0}));
+}
+template<unsigned_integral T> constexpr int countl_zero(T t) noexcept {
+#if __has_builtin(__builtin_stdc_leading_zeros)
+    return __builtin_stdc_leading_zeros(t);
+#else
+    return __builtin_clzg(t, __bit_width<T>());
+#endif
+}
+template<unsigned_integral T> constexpr int countr_zero(T t) noexcept {
+#if __has_builtin(__builtin_stdc_trailing_zeros)
+    return __builtin_stdc_trailing_zeros(t);
+#else
+    return __builtin_ctzg(t, __bit_width<T>());
+#endif
+}
+template<unsigned_integral T> constexpr int countl_one(T t) noexcept {
+#if __has_builtin(__builtin_stdc_leading_ones)
+    return __builtin_stdc_leading_ones(t);
+#else
+    return countl_zero(T(~t));
+#endif
+}
+template<unsigned_integral T> constexpr int countr_one(T t) noexcept {
+#if __has_builtin(__builtin_stdc_trailing_ones)
+    return __builtin_stdc_trailing_ones(t);
+#else
+    return countr_zero(T(~t));
+#endif
+}
+
+template<unsigned_integral T> constexpr bool has_single_bit(T t) noexcept {
+#if __has_builtin(__builtin_stdc_has_single_bit)
+    return __builtin_stdc_has_single_bit(t);
+#else
+    return popcount(t) == 1;
+#endif
+}
+
+template<unsigned_integral T> [[nodiscard]] constexpr int bit_width(T x) noexcept {
+#if __has_builtin(__builtin_stdc_bit_width)
+    return __builtin_stdc_bit_width(x);
+#else
+    return x == 0 ? 0 : __bit_width<T>() - std::countl_zero(x);
+#endif
+}
+
+template<unsigned_integral T> [[nodiscard]] constexpr T bit_floor(T x) noexcept {
+#if __has_builtin(__builtin_stdc_bit_floor)
+    return __builtin_stdc_bit_floor(x);
+#else
+    return x == 0 ? T(0) : static_cast<T>(T(1) << (std::bit_width(x) - 1));
+#endif
+}
+
+template<unsigned_integral T> [[nodiscard]] constexpr T bit_ceil(T x) {
+#if __has_builtin(__builtin_stdc_bit_ceil)
+    return __builtin_stdc_bit_ceil(x);
+#else
+    if (x <= 1) return T(1);
+    return static_cast<T>(T(1) << std::bit_width(static_cast<T>(x - 1)));
+#endif
+}
+template<integral T, integral S> constexpr T shl(T t, S s) noexcept {
+    constexpr int W = __bit_width<T>();
+    using U         = make_unsigned_t<T>;
+
+    if (s == 0) return t;
+
+    if (s > 0) {
+        if (s >= W) return T(0);
+        return static_cast<T>(static_cast<U>(t) << s);
+    } else {
+        // s < 0: compute x * 2^s == x >> (-s) with floor rounding
+        using US = make_unsigned_t<S>;
+        US k     = static_cast<US>(-(s + 1)) + 1;  // Safe negation even for S_MIN
+        if (k >= W) { return (t < 0) ? T(-1) : T(0); }
+        return static_cast<T>(t >> k);  // C++20 guarantees arithmetic right shift
+    }
+}
+template<integral T, integral S> constexpr T shr(T t, S s) noexcept {
+    constexpr int W = __bit_width<T>();
+    using U         = make_unsigned_t<T>;
+
+    if (s == 0) return t;
+
+    if (s > 0) {
+        if (s >= W) { return (t < 0) ? T(-1) : T(0); }
+        return static_cast<T>(t >> s);
+    } else {
+        // s < 0: compute x * 2^(-s) == x << (-s)
+        using US = make_unsigned_t<S>;
+        US k     = static_cast<US>(-(s + 1)) + 1;
+        if (k >= W) return T(0);
+        return static_cast<T>(static_cast<U>(t) << k);
+    }
+}
+
+template<unsigned_integral T> [[nodiscard]] constexpr T rotl(T t, int s) noexcept {
+#if __has_builtin(__builtin_stdc_rotate_left)
+    return __builtin_stdc_rotate_left(t, s);
+#else
+    constexpr int N = __bit_width<T>();
+    int r           = s % N;
+    if (r < 0) r += N;
+    if (r == 0) return t;
+    return static_cast<T>((t << r) | (t >> (N - r)));
+#endif
+}
+
+template<unsigned_integral T> [[nodiscard]] constexpr T rotr(T t, int s) noexcept {
+#if __has_builtin(__builtin_stdc_rotate_right)
+    return __builtin_stdc_rotate_right(t, s);
+#else
+    constexpr int N = __bit_width<T>();
+    int r           = s % N;
+    if (r < 0) r += N;
+    if (r == 0) return t;
+    return static_cast<T>((t >> r) | (t << (N - r)));
+#endif
+}
+
+template<unsigned_integral T> constexpr T bit_reverse(T t) noexcept {
+    return __builtin_bitreverseg(t);
+}
+
+}  // namespace std

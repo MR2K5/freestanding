@@ -1,0 +1,186 @@
+#pragma once
+
+#include <__iterator/adaptors.hpp>
+#include <__iterator/pointer_wrapper.hpp>
+#include <__ranges/core.hpp>
+#include <cstddef>
+#include <optional>
+
+namespace std {
+
+template<class T, size_t N> class inplace_vector {
+public:
+    // types:
+    using value_type       = T;
+    using pointer          = T*;
+    using const_pointer    = T const*;
+    using reference        = value_type&;
+    using const_reference  = value_type const&;
+    using size_type        = size_t;
+    using difference_type  = ptrdiff_t;
+    using iterator         = __detail::__pointer_wrapper<T>;        // see [container.requirements]
+    using const_iterator   = __detail::__pointer_wrapper<T const>;  // see [container.requirements]
+    using reverse_iterator = std::reverse_iterator<iterator>;
+    using const_reverse_iterator = std::reverse_iterator<const_iterator>;
+
+    // [inplace.vector.cons], construct/copy/destroy
+    constexpr inplace_vector() noexcept;
+
+#if !_STD_HAS_EH
+    constexpr explicit inplace_vector(size_type n);  // freestanding-deleted
+
+    constexpr inplace_vector(size_type n, T const& value);  // freestanding-deleted
+
+    template<class InputIterator>
+    constexpr inplace_vector(InputIterator first, InputIterator last);  // freestanding-deleted
+
+    template<ranges::__detail::container_compatible_range<T> R>
+    constexpr inplace_vector(from_range_t, R&& rg);  // freestanding-deleted
+
+    constexpr inplace_vector(initializer_list<T> il);  // freestanding-deleted
+
+    constexpr inplace_vector& operator=(initializer_list<T>);  // freestanding-deleted
+    template<class InputIterator>
+
+    constexpr void assign(InputIterator first, InputIterator last);  // freestanding-deleted
+    template<ranges::__detail::container_compatible_range<T> R>
+
+    constexpr void assign_range(R&& rg);  // freestanding-deleted
+
+    constexpr void assign(size_type n, T const& u);  // freestanding-deleted
+
+    constexpr void assign(initializer_list<T> il);  // freestanding-deleted
+#else
+    constexpr explicit inplace_vector(size_type n)        = _DELETE_NO_EXCEPTIONS;
+    constexpr inplace_vector(size_type n, T const& value) = _DELETE_NO_EXCEPTIONS;
+    template<class InputIterator>
+    constexpr inplace_vector(InputIterator first, InputIterator last) = _DELETE_NO_EXCEPTIONS;
+    template<ranges::__detail::container_compatible_range<T> R>
+    constexpr inplace_vector(from_range_t, R&& rg)           = _DELETE_NO_EXCEPTIONS;
+    constexpr inplace_vector(initializer_list<T> il)         = _DELETE_NO_EXCEPTIONS;
+    constexpr inplace_vector& operator=(initializer_list<T>) = _DELETE_NO_EXCEPTIONS;
+    template<class InputIterator>
+    constexpr void assign(InputIterator first, InputIterator last) = _DELETE_NO_EXCEPTIONS;
+    template<ranges::__detail::container_compatible_range<T> R>
+    constexpr void assign_range(R&& rg)            = _DELETE_NO_EXCEPTIONS;
+    constexpr void assign(size_type n, T const& u) = _DELETE_NO_EXCEPTIONS;
+    constexpr void assign(initializer_list<T> il)  = _DELETE_NO_EXCEPTIONS;
+#endif
+
+    constexpr inplace_vector(inplace_vector const&);
+
+    constexpr inplace_vector(
+        inplace_vector&&
+    ) noexcept(N == 0 || is_nothrow_move_constructible_v<T>);
+
+    constexpr ~inplace_vector();
+
+    constexpr inplace_vector& operator=(inplace_vector const& other);
+
+    constexpr inplace_vector& operator=(
+        inplace_vector&& other
+    ) noexcept(N == 0 || (is_nothrow_move_assignable_v<T> && is_nothrow_move_constructible_v<T>));
+
+    // iterators
+    constexpr iterator begin() noexcept;
+    constexpr const_iterator begin() const noexcept;
+    constexpr iterator end() noexcept;
+    constexpr const_iterator end() const noexcept;
+    constexpr reverse_iterator rbegin() noexcept;
+    constexpr const_reverse_iterator rbegin() const noexcept;
+    constexpr reverse_iterator rend() noexcept;
+    constexpr const_reverse_iterator rend() const noexcept;
+
+    constexpr const_iterator cbegin() const noexcept;
+    constexpr const_iterator cend() const noexcept;
+    constexpr const_reverse_iterator crbegin() const noexcept;
+    constexpr const_reverse_iterator crend() const noexcept;
+
+    // [inplace.vector.capacity], capacity
+    constexpr bool empty() const noexcept;
+    constexpr size_type size() const noexcept;
+    static constexpr size_type max_size() noexcept;
+    static constexpr size_type capacity() noexcept;
+    constexpr void resize(size_type sz);              // freestanding-deleted
+    constexpr void resize(size_type sz, T const& c);  // freestanding-deleted
+    static constexpr void reserve(size_type n);       // freestanding-deleted
+    static constexpr void shrink_to_fit() noexcept;
+
+    // element access
+    constexpr reference operator[](size_type n);
+    constexpr const_reference operator[](size_type n) const;
+    constexpr reference at(size_type n);              // freestanding-deleted
+    constexpr const_reference at(size_type n) const;  // freestanding-deleted
+    constexpr reference front();
+    constexpr const_reference front() const;
+    constexpr reference back();
+    constexpr const_reference back() const;
+
+    // [inplace.vector.data], data access
+    constexpr T* data() noexcept;
+    constexpr T const* data() const noexcept;
+
+    // [inplace.vector.modifiers], modifiers
+    template<class... Args>
+    constexpr reference emplace_back(Args&&... args);  // freestanding-deleted
+    constexpr reference push_back(T const& x);         // freestanding-deleted
+    constexpr reference push_back(T&& x);              // freestanding-deleted
+    template<ranges::__detail::container_compatible_range<T> R>
+    constexpr void append_range(R&& rg);  // freestanding-deleted
+    constexpr void pop_back();
+
+    template<class... Args> constexpr optional<reference> try_emplace_back(Args&&... args);
+    constexpr optional<reference> try_push_back(T const& x);
+    constexpr optional<reference> try_push_back(T&& x);
+
+    template<class... Args> constexpr reference unchecked_emplace_back(Args&&... args);
+    constexpr reference unchecked_push_back(T const& x);
+    constexpr reference unchecked_push_back(T&& x);
+
+    template<class... Args>
+    constexpr iterator emplace(const_iterator position, Args&&... args);  // freestanding-deleted
+    constexpr iterator insert(const_iterator position, T const& x);       // freestanding-deleted
+    constexpr iterator insert(const_iterator position, T&& x);            // freestanding-deleted
+    constexpr iterator insert(
+        const_iterator position, size_type n,  // freestanding-deleted
+        T const& x
+    );
+    template<class InputIterator>
+    constexpr iterator insert(
+        const_iterator position,  // freestanding-deleted
+        InputIterator first, InputIterator last
+    );
+    template<ranges::__detail::container_compatible_range<T> R>
+    constexpr iterator insert_range(const_iterator position, R&& rg);  // freestanding-deleted
+    constexpr iterator insert(
+        const_iterator position,  // freestanding-deleted
+        initializer_list<T> il
+    );
+    constexpr iterator erase(const_iterator position);
+    constexpr iterator erase(const_iterator first, const_iterator last);
+    constexpr void swap(
+        inplace_vector& x
+    ) noexcept(N == 0 || (is_nothrow_swappable_v<T> && is_nothrow_move_constructible_v<T>));
+    constexpr void clear() noexcept;
+
+    friend constexpr bool operator==(inplace_vector const& x, inplace_vector const& y);
+    friend constexpr auto operator<=>(inplace_vector const& x, inplace_vector const& y)
+        requires requires(T const t) { __synth_three_way(t, t); } {
+        return lexicographical_compare_three_way(
+            x.begin(), x.end(), y.begin(), y.end(), __synth_three_way
+        );
+    }
+    friend constexpr void swap(
+        inplace_vector& x, inplace_vector& y
+    ) noexcept(N == 0 || (is_nothrow_swappable_v<T> && is_nothrow_move_constructible_v<T>)) {
+        x.swap(y);
+    }
+
+private:
+    union {
+        T values_[N];
+    };
+    size_t cap_;
+};
+
+}  // namespace std

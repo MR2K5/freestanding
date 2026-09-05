@@ -1,12 +1,11 @@
 #pragma once
 // code: language=c++
 
-#include "__iterator/pointer_wrapper.hpp"
 #include <__iterator/adaptors.hpp>
+#include <__iterator/pointer_wrapper.hpp>
 
 #include <compare>
 #include <cstddef>
-#include <iterator>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -54,7 +53,7 @@ public:
     constexpr T& operator[](size_t n) noexcept { return arr_[n]; }
     constexpr T const& operator[](size_t n) const noexcept { return arr_[n]; }
 
-#if _STD_HAS_EXCEPTIONS
+#if _STD_HAS_EH
 
     constexpr T& at(size_t n) {
         if (n >= N) __throw_out_of_range("array::at");
@@ -117,7 +116,7 @@ public:
     constexpr T& operator[](size_t) noexcept { unreachable(); }
     constexpr T const& operator[](size_t) const noexcept { unreachable(); }
 
-#if _STD_HAS_EXCEPTIONS
+#if _STD_HAS_EH
     constexpr T& at(size_t) { __throw_out_of_range("array<0>::at"); }
     constexpr T const& at(size_t) const { __throw_out_of_range("array<0>::at"); }
 #else

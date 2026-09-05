@@ -118,6 +118,10 @@ public:
     constexpr auto size() const requires(!__unreachable) {
         return __detail::__to_unsigned_like(bound_);
     }
+
+    constexpr auto __value() const {
+        return value_;
+    }
 };
 template<class W, class Bound = unreachable_sentinel_t>
 repeat_view(W, Bound = Bound()) -> repeat_view<W, Bound>;

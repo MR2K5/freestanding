@@ -7,7 +7,6 @@
 #include <__iterator/iter_swap.hpp>
 #include <__iterator/operators.hpp>
 
-#include <concepts>
 #include <cassert>
 #include <compare>
 #include <concepts>
@@ -49,7 +48,7 @@ public:
         return *this;
     }
 
-    constexpr It base() { return current; }
+    constexpr It base() const { return current; }
 
     constexpr reference operator*() const {
         It tmp = current;
@@ -108,11 +107,11 @@ public:
     }
 
     template<indirectly_swappable<It> It2>
-    friend constexpr void iter_swap(reverse_iterator const& x, reverse_iterator<It2> const& y)
-        noexcept(
-            is_nothrow_copy_constructible_v<It> && is_nothrow_copy_constructible_v<It2>
-            && noexcept(ranges::iter_swap(--declval<It&>(), --declval<It2&>()))
-        ) {
+    friend constexpr void
+    iter_swap(reverse_iterator const& x, reverse_iterator<It2> const& y) noexcept(
+        is_nothrow_copy_constructible_v<It> && is_nothrow_copy_constructible_v<It2>
+        && noexcept(ranges::iter_swap(--declval<It&>(), --declval<It2&>()))
+    ) {
         auto tmp_x = x.base();
         auto tmp_y = y.base();
         return ranges::iter_swap(--tmp_x, --tmp_y);
@@ -131,7 +130,7 @@ template<class It> constexpr reverse_iterator<It> make_reverse_iterator(It i) {
     }
 
 _DECL_REVIT_COMP(==, ==)
-_DECL_REVIT_COMP(!=, ==)
+_DECL_REVIT_COMP(!=, !=)
 _DECL_REVIT_COMP(<, >)
 _DECL_REVIT_COMP(<=, >=)
 _DECL_REVIT_COMP(>, <)
@@ -313,13 +312,14 @@ public:
     friend constexpr decltype(auto) operator-(move_iterator const& x, move_iterator<It2> const& y) {
         return x.base() - y.base();
     }
-    friend constexpr iter_rvalue_reference_t<It> iter_move(move_iterator const& i)
-        noexcept(noexcept(ranges::iter_move(i.cur_))) {
+    friend constexpr iter_rvalue_reference_t<It>
+    iter_move(move_iterator const& i) noexcept(noexcept(ranges::iter_move(i.cur_))) {
         return ranges::iter_move(i.cur_);
     }
     template<indirectly_swappable<It> It2>
-    friend constexpr void iter_swap(move_iterator const& x, move_iterator<It2> const& y)
-        noexcept(noexcept(ranges::iter_swap(x.base(), y.base()))) {
+    friend constexpr void iter_swap(move_iterator const& x, move_iterator<It2> const& y) noexcept(
+        noexcept(ranges::iter_swap(x.base(), y.base()))
+    ) {
         ranges::iter_swap(x.base(), y.base());
     }
 };
@@ -350,21 +350,21 @@ constexpr bool operator<(move_iterator<It1> const& x, move_iterator<It2> const& 
 template<class It1, class It2>
 constexpr bool operator<=(move_iterator<It1> const& x, move_iterator<It2> const& y)
     requires requires {
-        { x.base() <= y.base() } ->boolean_testable;
+        { x.base() <= y.base() } -> boolean_testable;
     } {
     return x.base() <= y.base();
 }
 template<class It1, class It2>
 constexpr bool operator>(move_iterator<It1> const& x, move_iterator<It2> const& y)
     requires requires {
-        { x.base() > y.base() } ->boolean_testable;
+        { x.base() > y.base() } -> boolean_testable;
     } {
     return x.base() > y.base();
 }
 template<class It1, class It2>
 constexpr bool operator>=(move_iterator<It1> const& x, move_iterator<It2> const& y)
     requires requires {
-        { x.base() >= y.base() } ->boolean_testable;
+        { x.base() >= y.base() } -> boolean_testable;
     } {
     return x.base() >= y.base();
 }
@@ -378,7 +378,7 @@ namespace ranges {
 
 namespace __detail {
 
-struct __advanve_fn {
+struct __advance_fn {
     template<input_or_output_iterator I>
     static constexpr void operator()(I& i, iter_difference_t<I> n) {
         assert(n >= 0 || bidirectional_iterator<I>);
@@ -438,14 +438,13 @@ struct __advanve_fn {
     }
 };
 
-// TODO next, prev, distance
-
 }  // namespace __detail
 
 inline namespace __cpo {
-inline constexpr __detail::__advanve_fn advance;
+inline constexpr __detail::__advance_fn advance;
 }
 
 }  // namespace ranges
+
 
 }  // namespace std

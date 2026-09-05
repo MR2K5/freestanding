@@ -2,10 +2,10 @@
 // code: language=c++
 // IWYU pragma: private: include <ranges>
 
-#include <__algorithm/copy_move_fill_find.hpp>
+#include <__algorithm/nonmodifying.hpp>
 #include <__iterator/concepts.hpp>
 #include <__ranges/core.hpp>
-#include <__ranges/transform.hpp>
+#include <__ranges/transform_view.hpp>
 #include <concepts>
 #include <type_traits>
 #include <utility>

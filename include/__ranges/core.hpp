@@ -1,6 +1,8 @@
 #pragma once
 // code: language=c++
 
+#include <__config.hpp>
+#include <__functional/core.hpp>
 #include <__iterator/adaptors.hpp>
 #include <__iterator/concepts.hpp>
 #include <__iterator/const_iterator.hpp>
@@ -9,7 +11,6 @@
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <initializer_list>
 #include <type_traits>
 #include <utility>
@@ -256,6 +257,46 @@ inline constexpr auto ssize = []<class T> requires requires {
 
 }  // namespace __cpo
 
+namespace __reserve_hint_adl {
+void reserve_hint() = delete;
+template<class T>
+concept __has_adl =
+    (is_class_v<remove_cvref_t<T>> || is_enum_v<remove_cvref_t<T>>) && requires(T& t) {
+        // ADL-only lookup because reserve_hint() poison pill blocks ordinary lookup
+        { auto(reserve_hint(t)) } -> __detail::__integer_like;
+    };
+}  // namespace __reserve_hint_adl
+
+inline constexpr struct __reserve_hint_fn {
+    template<class T>
+    static constexpr decltype(auto)
+    __impl(T&& t, __detail::__priority_tag<2>) noexcept(noexcept(ranges::size(FWD(t))))
+        requires requires { ranges::size(FWD(t)); } {
+        return ranges::size(FWD(t));
+    }
+
+    template<class T>
+    static constexpr decltype(auto)
+    __impl(T&& t, __detail::__priority_tag<1>) noexcept(noexcept(auto(t.reserve_hint())))
+        requires requires {
+            { auto(t.reserve_hint()) } -> __detail::__integer_like;
+        } {
+        return auto(t.reserve_hint());
+    }
+
+    template<class T>
+    static constexpr decltype(auto)
+    __impl(T&& t, __detail::__priority_tag<0>) noexcept(noexcept(auto(reserve_hint(t)))) {
+        return auto(reserve_hint(t));
+    }
+
+    static constexpr decltype(auto)
+    operator()(auto&& t) noexcept(noexcept(__impl(FWD(t), __detail::__priority_tag<2>())))
+        requires requires { __impl(FWD(t), __detail::__priority_tag<2>()); } {
+        return __impl(FWD(t), __detail::__priority_tag<2>());
+    }
+} reserve_hint;
+
 template<range R> using range_reference_t        = iter_reference_t<iterator_t<R>>;
 template<range R> using range_const_reference_t  = iter_const_reference_t<iterator_t<R>>;
 template<range R> using range_rvalue_reference_t = iter_rvalue_reference_t<iterator_t<R>>;
@@ -328,6 +369,8 @@ inline constexpr auto cdata = []<class T>
 }  // namespace __cpo
 
 template<class T> concept sized_range = ranges::range<T> && requires(T& t) { ranges::size(t); };
+template<class T>
+concept approximately_sized_range = ranges::range<T> && requires(T& t) { ranges::reserve_hint(t); };
 template<sized_range R> using range_size_t = decltype(ranges::size(std::declval<R&>()));
 template<range R> using range_difference_t = iter_difference_t<iterator_t<R>>;
 template<range R> using range_value_t      = iter_value_t<iterator_t<R>>;
@@ -519,6 +562,20 @@ public:
     constexpr decltype(auto) operator[](range_difference_t<R> n) const {
         return ranges::begin(derived())[n];
     }
+
+#if _STD_HAS_EH
+    template<random_access_range R = D> requires sized_range<R>
+    constexpr decltype(auto) at(range_difference_t<R> n);
+
+    template<random_access_range R = D const> requires sized_range<R>
+    constexpr decltype(auto) at(range_difference_t<R> n) const;
+#else
+    template<random_access_range R = D> requires sized_range<R>
+    constexpr decltype(auto) at(range_difference_t<R> n) = _DELETE_NO_EXCEPTIONS;
+
+    template<random_access_range R = D const> requires sized_range<R>
+    constexpr decltype(auto) at(range_difference_t<R> n) const = _DELETE_NO_EXCEPTIONS;
+#endif
 };
 
 template<range R> requires is_object_v<R> class ref_view: public view_interface<ref_view<R>> {
@@ -661,12 +718,21 @@ using __iota_diff_t = decltype([] {
             return int16_t();
         else if constexpr (sz < sizeof(int32_t))
             return int32_t();
+#ifdef __SIZEOF_INT128__
         else if constexpr (sz < sizeof(int64_t))
             return int64_t();
         else
             return __int128_t();
+#else
+        return uint64_t();
+#endif
     }
+#ifdef __SIZEOF_INT128__
     static_assert(sizeof(I) <= sizeof(__int128_t));
+#else
+    static_assert(sizeof(I) <= sizeof(uint64_t));
+#endif
+    // TODO was 128-bit mandated?
 }());
 
 template<class R>
@@ -684,6 +750,27 @@ concept __all_bidirectional = (bidirectional_range<conditional_t<C, Views const,
 template<bool C, class... Views>
 concept __all_forward = (forward_range<conditional_t<C, Views const, Views>> && ...);
 
+template<class R, class T>
+concept container_compatible_range =
+    ranges::input_range<R> && convertible_to<ranges::range_reference_t<R>, T>;
+
 }  // namespace __detail
+
+template<class T> requires is_object_v<T> class empty_view: public view_interface<empty_view<T>> {
+public:
+using __value_type = T;
+    static constexpr T* begin() noexcept { return nullptr; }
+    static constexpr T* end() noexcept { return nullptr; }
+    static constexpr T* data() noexcept { return nullptr; }
+    static constexpr size_t size() noexcept { return 0uz; }
+    static constexpr bool empty() noexcept { return true; }
+};
+
+  template<class T>
+    constexpr bool enable_borrowed_range<empty_view<T>> = true;
+
+namespace views {
+template<class T> inline constexpr empty_view<T> empty;
+}
 
 }  // namespace std::ranges
