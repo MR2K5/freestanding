@@ -439,7 +439,7 @@ inline constexpr struct __generate_n_fn {
     }
 } generate_n;
 
-inline constexpr struct {
+inline constexpr struct __remove_fn {
     template<
         permutable I, sentinel_for<I> S, class Proj = identity,
         class T = projected_value_t<I, Proj>>
@@ -465,7 +465,7 @@ inline constexpr struct {
     }
 } remove;
 
-inline constexpr struct {
+inline constexpr struct __remove_if_fn {
     template<
         permutable I, sentinel_for<I> S, class Proj = identity,
         indirect_unary_predicate<projected<I, Proj>> Pred>
@@ -662,7 +662,7 @@ inline constexpr struct __reverse_copy_fn {
     }
 } reverse_copy;
 
-inline constexpr struct {
+inline constexpr struct __reverse_fn {
     template<bidirectional_iterator I, sentinel_for<I> S> requires permutable<I>
     static constexpr I operator()(I first, S last) {
         auto last2{next(first, last)};

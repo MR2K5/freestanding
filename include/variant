@@ -135,14 +135,6 @@ constexpr decltype(auto) __do_variant_indexed_visit(index_sequence<Is...>, F&& f
 
     size_t const index = ((vs.__index() * scales[Is]) + ...);
 
-    // if constexpr (deduce || !is_void) {                                                    \
-    //     using R_ =                                                                         \
-    //         decltype(declval<F>()(index_sequence<((N / scales[Is]) % sizes[Is])...>()));   \
-    //     if constexpr (deduce)                                                              \
-    //     else                                                                               \
-    //     static_assert(is_convertible_v<R_, Return>);                                   \
-    // }                                                                                      \
-
 #define _X(N_)                                                                                     \
     case Base + N_: {                                                                              \
         constexpr size_t N = Base + (N_);                                                          \

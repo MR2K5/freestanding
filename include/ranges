@@ -1,8 +1,12 @@
 #pragma once
 
+#include <__ranges/adjacent_transform_view.hpp>
+#include <__ranges/adjacent_view.hpp>
 #include <__ranges/as_const_view.hpp>
 #include <__ranges/as_rvalue.hpp>
+#include <__ranges/concat_view.hpp>
 #include <__ranges/core.hpp>
+#include <__ranges/counted.hpp>
 #include <__ranges/drop_view.hpp>
 #include <__ranges/drop_while_view.hpp>
 #include <__ranges/enumerate_view.hpp>
@@ -12,8 +16,12 @@
 #include <__ranges/result_types.hpp>
 #include <__ranges/reverse_view.hpp>
 #include <__ranges/single.hpp>
+#include <__ranges/slide_view.hpp>
+#include <__ranges/stride_view.hpp>
 #include <__ranges/subrange.hpp>
 #include <__ranges/take_view.hpp>
 #include <__ranges/take_while_view.hpp>
 #include <__ranges/to.hpp>
 #include <__ranges/transform_view.hpp>
+#include <__ranges/zip_transform_view.hpp>
+#include <__ranges/zip_view.hpp>

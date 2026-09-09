@@ -7,6 +7,14 @@ project(
     meson_version: '>=1.11',
 )
 
+add_project_arguments(
+    '-Wno-gcc-compat',
+    '-Wno-c11-extensions',
+    '-Wno-c99-extensions',
+    '-Wno-user-defined-literals',
+    language: 'cpp',
+)
+
 inc = include_directories('include', '.')
 std_inc = inc
 

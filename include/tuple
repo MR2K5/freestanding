@@ -27,6 +27,7 @@ concept __copy_list_initializable = requires {
 template<class Is, class... Ts> struct __tuple;
 template<size_t... Is, class... Ts>
 struct __tuple<index_sequence<Is...>, Ts...>: __tuple_leaf<Is, Ts>... {
+    template<class...> friend class tuple;
     template<class... Us> static consteval bool disambiguation_constraint() {
         if constexpr (sizeof...(Ts) == 1) {
             return !is_same_v<remove_cvref_t<Us...[0]>, tuple<Ts...>>;
@@ -74,7 +75,7 @@ struct __tuple<index_sequence<Is...>, Ts...>: __tuple_leaf<Is, Ts>... {
     template<class U, class U2, class... Us> struct __second<U, U2, Us...> {
         using type = U;
     };
-    template<class... Us> using __first_t = __first<Us...>::type;
+    template<class... Us> using __first_t  = __first<Us...>::type;
     template<class... Us> using __second_t = __second<Us...>::type;
 
 #define _DECL_CTOR(qual)                                                                           \
@@ -263,7 +264,8 @@ struct __tuple<index_sequence<Is...>, Ts...>: __tuple_leaf<Is, Ts>... {
     }
 };
 
-template<class... Ts> struct tuple: private __tuple<index_sequence_for<Ts...>, Ts...> {
+// TODO This should be private but it destroys things
+template<class... Ts> struct tuple: __tuple<index_sequence_for<Ts...>, Ts...> {
     using Base = __tuple<index_sequence_for<Ts...>, Ts...>;
     using Base::Base;
     using Base::operator=;
@@ -471,5 +473,24 @@ requires(__is_specialization_of_v<tuple, T> || __is_specialization_of_v<tuple, U
      && is_same_v<T, decay_t<T>> && is_same_v<U, decay_t<U>> && (tuple_size_v<T> == tuple_size_v<U>)
      && requires { typename __tuple_common_type<T, U, make_index_sequence<tuple_size_v<T>>>::type; }
 struct common_type<T, U>: __tuple_common_type<T, U, make_index_sequence<tuple_size_v<T>>> {};
+
+namespace __detail {
+template<class F, class Tuple> constexpr auto __tuple_transform(F&& f, Tuple&& tuple) {
+    return std::apply(
+        [&]<class... Ts>(Ts&&... args) {
+            return std::tuple<invoke_result_t<F&, Ts>...>(std::invoke(f, FWD(args))...);
+        },
+        FWD(tuple)
+    );
+}
+
+template<class F, class Tuple> constexpr void __tuple_for_each(F&& f, Tuple&& tuple) {
+    std::apply(
+        [&]<class... Ts>(Ts&&... args) { (static_cast<void>(std::invoke(f, FWD(args))), ...); },
+        FWD(tuple)
+    );
+}
+
+}  // namespace __detail
 
 }  // namespace std

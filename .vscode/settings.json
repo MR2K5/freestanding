@@ -4,8 +4,11 @@
         "--enable-config"
     ],
     "cSpell.words": [
+        "aeabi",
+        "exidx",
+        "ucpb",
         "unex"
     ],
     "cmake.sourceDirectory": "/home/massimo/projects/freestanding/subprojects/lwmem",
-    "mesonbuild.buildFolder": "build-x64"
+    "mesonbuild.buildFolder": "build-armv7"
 }

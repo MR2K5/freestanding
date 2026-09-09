@@ -2,8 +2,8 @@
 // code: language=c++
 // IWYU pragma: private: include <iterator>
 
-#include <__memory/base.hpp>
 #include <__functional/core.hpp>
+#include <__memory/base.hpp>
 
 #include <concepts>
 #include <cstddef>
@@ -128,7 +128,7 @@ using iter_const_reference_t =
 template<class T>
 using iter_difference_t = conditional_t<
     __detail::__is_iter_traits_primary<iterator_traits<remove_cvref_t<T>>>,
-    iterator_traits<remove_cvref_t<T>>, incrementable_traits<remove_cvref_t<T>>>::difference_type;
+    incrementable_traits<remove_cvref_t<T>>, iterator_traits<remove_cvref_t<T>>>::difference_type;
 
 template<class Out, class T>
 concept indirectly_writable = requires(Out&& o, T&& t) {
@@ -158,7 +158,7 @@ concept input_or_output_iterator = requires(I i) {
 
 template<class S, class I>
 concept sentinel_for = semiregular<S> && input_or_output_iterator<I>
-                    &&__detail::__weakly_equality_comparable_with<I, S>;
+                    && __detail::__weakly_equality_comparable_with<I, S>;
 
 template<class S, class I> inline constexpr bool disable_sized_sentinel_for = false;
 
@@ -363,7 +363,6 @@ template<class I> requires(!__detail::__iter_traits_4<I>) && __detail::__LegacyI
 };
 
 template<class T> requires is_object_v<T> struct iterator_traits<T*> {
-    using __primary_template = void;
     using difference_type    = ptrdiff_t;
     using value_type         = remove_cv_t<T>;
     using pointer            = T*;

@@ -12,7 +12,7 @@ namespace __detail {
 using namespace ::std::__detail;
 
 template<class T> concept __is_lvalue = is_lvalue_reference_v<T>;
-template<class T> concept __is_rvalue = is_rvalue_reference_v<T>;
+template<class T> concept __is_rvalue = !is_lvalue_reference_v<T>;
 
 struct __iter_move {
     template<class T, class U = remove_cvref_t<T>>

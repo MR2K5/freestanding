@@ -141,10 +141,19 @@ typedef __UINTPTR_TYPE__ uintptr_t;
 #define SIG_ATOMIC_MIN __SIG_ATOMIC_MIN__
 
 #define WCHAR_MAX __WCHAR_MAX__
-#define WCHAR_MIN __WCHAR_MIN__
+#ifdef __WCHAR_UNSIGNED__
+#  define WCHAR_MIN 0
+#else
+#  define WCHAR_MIN (-__WCHAR_MAX__ - 1)
+#endif
 
 #define WINT_MAX __WINT_MAX__
-#define WINT_MIN __WINT_MIN__
+#ifdef __WINT_UNSIGNED__
+#  define WINT_MIN 0
+#else
+#  define WINT_MIN (-__WINT_MAX__ - 1)
+#endif
+
 
 // ============================================================================
 // 4. Function Macros for Literal Constants (Target Suffix Resolution Engine)

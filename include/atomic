@@ -36,14 +36,6 @@ constexpr memory_order __get_order_failure(memory_order o) noexcept {
     return o;
 }
 
-[[gnu::always_inline]] inline void __cpu_relax() noexcept {
-#ifdef __x86_64__
-    __builtin_ia32_pause();
-#else
-#  error "Not implemented"
-#endif
-}
-
 template<class T> constexpr bool __atomic_bitwise_eq(T x, T y) noexcept {
     if constexpr (std::is_integral_v<T> || std::is_pointer_v<T> || std::is_enum_v<T>) {
         return x == y;
@@ -56,13 +48,16 @@ template<class T> constexpr bool __atomic_bitwise_eq(T x, T y) noexcept {
     }
 }
 
+void __cpu_atomic_wait(void const volatile* addr, size_t size);
+void __cpu_atomic_wake(void const volatile* addr, size_t size, bool all);
+
 // TODO e.g. low power states?
 template<class T> void __atomic_wait(T const volatile* p, T old, memory_order o) noexcept {
     while (1) {
         T val;
         __atomic_load(p, &val, __get_order(o));
         if (!__atomic_bitwise_eq(val, old)) return;
-        __cpu_relax();
+        __cpu_atomic_wait(p, sizeof(T));
     }
 }
 template<class T> constexpr void __atomic_wait(T const* p, T old, memory_order o) noexcept {
@@ -73,13 +68,17 @@ template<class T> constexpr void __atomic_wait(T const* p, T old, memory_order o
             T val;
             __atomic_load(p, &val, __get_order(o));
             if (!__atomic_bitwise_eq(val, old)) return;
-            __cpu_relax();
+            __cpu_atomic_wait(p, sizeof(T));
         }
     }
 }
 
-template<bool, class T> void __atomic_notify(T volatile*) noexcept {}
-template<bool, class T> constexpr void __atomic_notify(T*) noexcept {}
+template<bool, class T> void __atomic_notify(T volatile* p) noexcept {
+    __cpu_atomic_wake(p, sizeof(T), true);
+}
+template<bool, class T> constexpr void __atomic_notify(T* p) noexcept {
+    __cpu_atomic_wake(p, sizeof(T), true);
+}
 
 // Helper to inject difference_type for integral, floating-point, and pointer specializations
 template<class T> struct __atomic_members {};

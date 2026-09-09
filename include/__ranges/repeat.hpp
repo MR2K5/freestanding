@@ -128,7 +128,7 @@ repeat_view(W, Bound = Bound()) -> repeat_view<W, Bound>;
 
 namespace views {
 
-inline constexpr struct {
+inline constexpr struct __repeat_fn {
     template<class W, class Bound>
     static constexpr auto operator()(W&& val, Bound&& b)
         requires requires { repeat_view(std::forward<W>(val), std::forward<Bound>(b)); } {

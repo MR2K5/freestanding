@@ -4,7 +4,7 @@
 
 #define __cpp_lib_addressof_constexpr 201603L  // freestanding, also in <memory>
 // #define __cpp_lib_aligned_accessor                  202411L // freestanding, also in <mdspan>
-#define __cpp_lib_allocator_traits_is_always_equal  201411L
+#define __cpp_lib_allocator_traits_is_always_equal 201411L
 // freestanding, also in <memory>, <scoped_allocator>, <string>, <deque>, <forward_list>, <list>,
 // <vector>, <map>, <set>, <unordered_map>, <unordered_set>
 #define __cpp_lib_apply 201603L
@@ -16,14 +16,15 @@
 #define __cpp_lib_assume_aligned   201811L  // freestanding, also in <memory>
 #define __cpp_lib_atomic_flag_test 201907L  // freestanding, also in <atomic>
 // TODO is float enabled?
-#define __cpp_lib_atomic_float                      201711L // freestanding, also in <atomic>
+#define __cpp_lib_atomic_float               201711L  // freestanding, also in <atomic>
 #define __cpp_lib_atomic_is_always_lock_free 201603L  // freestanding, also in <atomic>
 #define __cpp_lib_atomic_min_max             202506L  // freestanding, also in <atomic>
 #define __cpp_lib_atomic_reductions          202506L  // freestanding, also in <atomic>
-#define __cpp_lib_atomic_ref                        202603L // freestanding, also in <atomic>
-#define __cpp_lib_atomic_value_initialization 201911L  // freestanding, also in <atomic>,
-                                                       // <memory>
-#define __cpp_lib_atomic_wait 201907L                  // freestanding, also in
+#define __cpp_lib_atomic_ref                 202603L  // freestanding, also in <atomic>
+#define __cpp_lib_atomic_value_initialization                                                      \
+    201911L                            // freestanding, also in <atomic>,
+                                       // <memory>
+#define __cpp_lib_atomic_wait 201907L  // freestanding, also in
 // <atomic>
 #define __cpp_lib_bind_back            202306L  // freestanding, also in <functional>
 #define __cpp_lib_bind_front           202306L  // freestanding, also in <functional>
@@ -55,30 +56,30 @@
 //   // also in <utility>, <tuple>, <optional>, <variant>, <expected>
 // #define __cpp_lib_contracts                         202502L // freestanding, also in <contracts>
 #define __cpp_lib_coroutine 201902L  // freestanding, also in <coroutine>
-// #define __cpp_lib_debugging                         202403L // freestanding, also in <debugging>
+#define __cpp_lib_debugging 202403L  // freestanding, also in <debugging>
 // #define __cpp_lib_define_static                     202506L // freestanding, also in <meta>
-#define __cpp_lib_destroying_delete 201806L  // freestanding, also in <new>
-#define __cpp_lib_endian            201907L  // freestanding, also in <bit>
-#define __cpp_lib_exchange_function 201304L  // freestanding, also in <utility>
-#define __cpp_lib_forward_like      202207L  // freestanding, also in <utility>
-#define __cpp_lib_freestanding_algorithm            202502L // freestanding, also in <algorithm>
-#define __cpp_lib_freestanding_array 202311L  // freestanding, also in <array>
+#define __cpp_lib_destroying_delete      201806L  // freestanding, also in <new>
+#define __cpp_lib_endian                 201907L  // freestanding, also in <bit>
+#define __cpp_lib_exchange_function      201304L  // freestanding, also in <utility>
+#define __cpp_lib_forward_like           202207L  // freestanding, also in <utility>
+#define __cpp_lib_freestanding_algorithm 202502L  // freestanding, also in <algorithm>
+#define __cpp_lib_freestanding_array     202311L  // freestanding, also in <array>
 // TODO only char done
-#define __cpp_lib_freestanding_char_traits          202306L // freestanding, also in <string>
-#define __cpp_lib_freestanding_charconv 202306L  // freestanding, also in <charconv>
-#define __cpp_lib_freestanding_cstdlib              202306L // freestanding, also in
+#define __cpp_lib_freestanding_char_traits 202306L  // freestanding, also in <string>
+#define __cpp_lib_freestanding_charconv    202306L  // freestanding, also in <charconv>
+#define __cpp_lib_freestanding_cstdlib     202306L  // freestanding, also in
 // <cstdlib>,<cmath>
 #define __cpp_lib_freestanding_cstring 202311L  // freestanding, also in <cstring>
 // #define __cpp_lib_freestanding_cwchar               202306L // freestanding, also in <cwchar>
-#define __cpp_lib_freestanding_errc                 202306L freestanding, also in
+#define __cpp_lib_freestanding_errc 202306L  // freestanding, also in
 // <cerrno>, <system_error>
 // #define __cpp_lib_freestanding_execution            202502L // freestanding, also in <execution>
 #define __cpp_lib_freestanding_expected            202311L  // freestanding, also in <expected>
 #define __cpp_lib_freestanding_feature_test_macros 202306L  // freestanding
-#define __cpp_lib_freestanding_functional           202306L // freestanding, also in <functional>
-#define __cpp_lib_freestanding_iterator             202306L // freestanding, also in <iterator>
+#define __cpp_lib_freestanding_functional          202306L  // freestanding, also in <functional>
+#define __cpp_lib_freestanding_iterator            202306L  // freestanding, also in <iterator>
 // #define __cpp_lib_freestanding_mdspan               202311L // freestanding, also in <mdspan>
-#define __cpp_lib_freestanding_memory               202502L // freestanding, also in <memory>
+#define __cpp_lib_freestanding_memory 202502L  // freestanding, also in <memory>
 // #define __cpp_lib_freestanding_numeric              202502L // freestanding, also in <numeric>
 
 #if _STD_HAS_HEAP
@@ -91,7 +92,7 @@
 // #define __cpp_lib_freestanding_random               202502L // freestanding, also in <random>
 // #define __cpp_lib_freestanding_ranges               202306L // freestanding, also in <ranges>
 // #define __cpp_lib_freestanding_ratio                202306L // freestanding, also in <ratio>
-#define __cpp_lib_freestanding_string_view          202311L // freestanding, also in
+#define __cpp_lib_freestanding_string_view 202311L  // freestanding, also in
 // <string_view>
 #define __cpp_lib_freestanding_tuple   202306L  // freestanding, also in <tuple>
 #define __cpp_lib_freestanding_utility 202306L  // freestanding, also in <utility>
@@ -139,29 +140,29 @@
 #define __cpp_lib_null_iterators 201304L  // freestanding, also in <iterator>
 // #define __cpp_lib_observable_checkpoint             202506L // freestanding, also in <utility>
 #define __cpp_lib_optional_range_support 202406L  // freestanding, also in <optional>
-#define __cpp_lib_out_ptr                           202311L // freestanding, also in <memory>
+#define __cpp_lib_out_ptr                202311L  // freestanding, also in <memory>
 // #define __cpp_lib_pointer_tag_pair                  202606L // freestanding, also in <memory>
-#define __cpp_lib_ranges_as_const                   202311L // freestanding, also in <ranges>
+#define __cpp_lib_ranges_as_const 202311L  // freestanding, also in <ranges>
 // #define __cpp_lib_ranges_as_input                   202502L // freestanding, also in <ranges>
-#define __cpp_lib_ranges_as_rvalue                  202207L // freestanding, also in <ranges>
+#define __cpp_lib_ranges_as_rvalue 202207L  // freestanding, also in <ranges>
 // #define __cpp_lib_ranges_cache_latest               202411L // freestanding, also in <ranges>
 // #define __cpp_lib_ranges_cartesian_product          202207L // freestanding, also in <ranges>
 // #define __cpp_lib_ranges_chunk                      202202L // freestanding, also in <ranges>
 // #define __cpp_lib_ranges_chunk_by                   202202L // freestanding, also in <ranges>
-// #define __cpp_lib_ranges_concat                     202403L // freestanding, also in <ranges>
+#define __cpp_lib_ranges_concat                     202403L // freestanding, also in <ranges>
 // #define __cpp_lib_ranges_contains                   202207L // freestanding, also in <algorithm>
-#define __cpp_lib_ranges_enumerate                  202302L // freestanding, also in <ranges>
-#define __cpp_lib_ranges_filter                     202603L // freestanding, also in <ranges>
+#define __cpp_lib_ranges_enumerate 202302L  // freestanding, also in <ranges>
+#define __cpp_lib_ranges_filter    202603L  // freestanding, also in <ranges>
 #define __cpp_lib_ranges_find_last 202207L  // freestanding, also in <algorithm>
-#define __cpp_lib_ranges_fold                       202207L // freestanding, also in <algorithm>
-#define __cpp_lib_ranges_iota                       202202L // freestanding, also in <numeric>
+#define __cpp_lib_ranges_fold      202207L  // freestanding, also in <algorithm>
+#define __cpp_lib_ranges_iota      202202L  // freestanding, also in <numeric>
 // #define __cpp_lib_ranges_join_with                  202202L // freestanding, also in <ranges>
-#define __cpp_lib_ranges_repeat                     202207L // freestanding, also in <ranges>
-// #define __cpp_lib_ranges_slide                      202202L // freestanding, also in <ranges>
+#define __cpp_lib_ranges_repeat 202207L  // freestanding, also in <ranges>
+#define __cpp_lib_ranges_slide                      202202L // freestanding, also in <ranges>
 #define __cpp_lib_ranges_starts_ends_with 202106L  // freestanding, also in <algorithm>
-// #define __cpp_lib_ranges_stride                     202207L // freestanding, also in <ranges>
+#define __cpp_lib_ranges_stride                     202207L // freestanding, also in <ranges>
 // #define __cpp_lib_ranges_to_container               202202L // freestanding, also in <ranges>
-// #define __cpp_lib_ranges_zip                        202110L
+#define __cpp_lib_ranges_zip                        202110L
 //   // freestanding, also in <ranges>, <tuple>, <utility>
 // #define __cpp_lib_ratio                             202306L // freestanding, also in <ratio>
 #define __cpp_lib_reference_from_temporary 202202L  // freestanding, also in <type_traits>

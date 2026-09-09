@@ -436,7 +436,7 @@ template<class T, class U> constexpr T const&& get(pair<U, T> const&& p) noexcep
 template<class T, class U> struct tuple_size<pair<T, U>>: integral_constant<size_t, 2> {};
 template<size_t I, class T, class U> struct tuple_element<I, pair<T, U>> {
     static_assert(I <= 1);
-    using type = conditional<I == 0, T, U>;
+    using type = conditional_t<I == 0, T, U>;
 };
 
 template<
@@ -677,7 +677,7 @@ template<__cw_fixed_value X, class> struct constant_wrapper: __cw_operators {
     constexpr operator decltype(value)() const noexcept { return value; }
 
     template<class... Args>
-    static constexpr decltype(auto) operator()(Args&&... args) noexcept(
+    static constexpr decltype(auto) operator()(Args&&...) noexcept(
         noexcept(std::invoke(value, remove_cvref_t<Args>::value...))
     ) requires(__constexpr_param<remove_cvref_t<Args>> && ...) && requires {
         typename constant_wrapper<std::invoke(value, remove_cvref_t<Args>::value...)>;
@@ -693,7 +693,7 @@ template<__cw_fixed_value X, class> struct constant_wrapper: __cw_operators {
 
     template<class... Args>
     static constexpr decltype(auto)
-    operator[](Args&&... args) noexcept(noexcept(value[remove_cvref_t<Args>::value...]))
+    operator[](Args&&...) noexcept(noexcept(value[remove_cvref_t<Args>::value...]))
         requires(__constexpr_param<remove_cvref_t<Args>> && ...)
              && requires { typename constant_wrapper<value[remove_cvref_t<Args>::value...]>; } {
         return constant_wrapper<value[remove_cvref_t<Args>::value...]>{};

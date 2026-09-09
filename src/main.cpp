@@ -19,9 +19,9 @@ struct A {
 };
 
 [[gnu::used, gnu::retain]] int main() {
-    std::array a{-2, 99, 0, -743, INT_MAX, 2, INT_MIN, 4};
-    std::ranges::sort(a); 
-    return 0;
+ constexpr int x = __ARM_FP;
+
+    using X = std::iterator_traits<char*>;
 }
 
 extern "C" void _start() {

@@ -50,6 +50,10 @@ using namespace ::std::__detail;
       noexcept(noexcept(__VA_ARGS__))->decltype(__VA_ARGS__) requires requires { __VA_ARGS__; } {  \
           return __VA_ARGS__;                                                                      \
       }
+      #  define _STD_RETURN_REQ(REQ, ...)                                                                         \
+      noexcept(noexcept(__VA_ARGS__))->decltype(__VA_ARGS__) requires REQ && requires { __VA_ARGS__; } {  \
+          return __VA_ARGS__;                                                                      \
+      }
 
 #  include <version>
 
