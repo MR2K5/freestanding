@@ -10,5 +10,10 @@
         "unex"
     ],
     "cmake.sourceDirectory": "/home/massimo/projects/freestanding/subprojects/lwmem",
-    "mesonbuild.buildFolder": "build-armv7"
+    "mesonbuild.buildFolder": "build-armv7",
+    "lldb.displayFormat": "auto",
+    "lldb.showDisassembly": "auto",
+    "lldb.dereferencePointers": true,
+    "lldb.consoleMode": "commands",
+    // "lldb-dap.executable-path": "/home/massimo/llvm/bin/lldb-dap"
 }

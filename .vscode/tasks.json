@@ -1,0 +1,16 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "start-qemu",
+			"type": "shell",
+			"isBackground": true,
+			"command": "qemu-system-arm -M lm3s6965evb -cpu cortex-m4 -nographic -kernel ${workspaceFolder}/build-armv7/main -s -S"
+		},
+		{
+			"label": "kill-qemu",
+			"type": "shell",
+			"command": "killall qemu-system-arm || true"
+		}
+	]
+}

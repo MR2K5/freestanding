@@ -5,12 +5,17 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Launch",
-            "type": "lldb",
+            "type": "lldb-dap",
             "request": "launch",
-            "program": "${workspaceRoot}/build-x64/main",
-            "args": [],
-            "cwd": "${workspaceRoot}"
+            "name": "Debug ARM QEMU (lldb-dap)",
+            "program": "${workspaceFolder}/build-armv7/main",
+            "launchCommands": [
+                "target create ${workspaceFolder}/build-armv7/main",
+                "gdb-remote localhost:1234",
+            ],
+            "postRunCommands": [
+                "register read pc sp"
+            ]
         }
     ]
 }
