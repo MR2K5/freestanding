@@ -33,7 +33,7 @@ subdir('test')
 if not meson.is_subproject()
     executable(
         'main',
-        sources: 'src/main.cpp',
+        sources: ['src/main.cpp', 'src/test-crt0.cpp'],
         include_directories: inc,
         dependencies: std_dep,
     )

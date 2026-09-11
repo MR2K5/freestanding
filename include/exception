@@ -1,9 +1,15 @@
 #pragma once
 
+#include <__config.hpp>
+#include <cstring>
+#include <cxxabi.h>
+#include <unwind.h>
+
 namespace std {
 
 using terminate_handler = void (*)();
 [[noreturn]] void terminate() noexcept;
+[[noreturn]] void __terminate(terminate_handler) noexcept;
 terminate_handler set_terminate(terminate_handler h) noexcept;
 terminate_handler get_terminate() noexcept;
 
@@ -29,6 +35,87 @@ public:
     }
 };
 
-[[nodiscard]] int uncaught_exception() noexcept;
+[[nodiscard]] inline int uncaught_exceptions() noexcept {
+#if _STD_HAS_EH
+    return abi::__cxa_globals.uncaught_exceptions;
+#else
+    return 0;
+#endif
+}
+
+// TODO constexpr
+
+class exception_ptr {
+public:
+    constexpr exception_ptr() = default;
+    constexpr exception_ptr(nullptr_t) noexcept {}
+
+    friend constexpr bool
+    operator==(exception_ptr const& a, exception_ptr const& b) noexcept = default;
+    friend constexpr bool operator==(exception_ptr const& a, nullptr_t) noexcept {
+        return a.ptr_ == nullptr;
+    }
+
+    constexpr exception_ptr(exception_ptr const& o) noexcept: ptr_(o.ptr_) {
+        if (ptr_) abi::__cxa_increment_exception_refcount(ptr_);
+    }
+    constexpr exception_ptr(exception_ptr&& o) noexcept: ptr_(o.ptr_) { o.ptr_ = nullptr; }
+    constexpr exception_ptr& operator=(exception_ptr const& o) noexcept {
+        auto tmp(o);
+        swap(tmp);
+        return *this;
+    }
+    constexpr exception_ptr& operator=(exception_ptr&& o) noexcept {
+        swap(o);
+        return *this;
+    }
+    constexpr exception_ptr& operator=(nullptr_t) noexcept {
+        if (ptr_) abi::__cxa_decrement_exception_refcount(ptr_);
+        ptr_ = nullptr;
+        return *this;
+    }
+
+    constexpr void swap(exception_ptr& o) noexcept {
+        auto tmp = o.ptr_;
+        o.ptr_   = ptr_;
+        ptr_     = tmp;
+    }
+
+    void* __get() const noexcept { return ptr_; }
+
+private:
+    constexpr exception_ptr(void* p) noexcept: ptr_(p) {}
+    friend exception_ptr current_exception() noexcept;
+
+    void* ptr_ = nullptr;
+};
+
+exception_ptr current_exception() noexcept;
+[[noreturn]] void rethrow_exception(exception_ptr p);
+
+template<class E> constexpr exception_ptr make_exception_ptr(E e) noexcept {
+// TODO make_exception_ptr can be made to work in -fno-exceptions
+#if _STD_HAS_EH
+    try {
+        throw e;
+    } catch (...) { return current_exception(); }
+#else
+    return nullptr;
+#endif
+}
+
+template<class> class optional;
+
+template<class E> constexpr optional<E const&> exception_ptr_cast(exception_ptr const& p) noexcept;
+
+class __foreign_exception: public std::exception {
+public:
+    constexpr __foreign_exception(char const* p) noexcept { std::memcpy(exc_class, p, 8); }
+
+    char const* what() const noexcept override { return exc_class; }
+
+private:
+    char exc_class[8]{};
+};
 
 }  // namespace std

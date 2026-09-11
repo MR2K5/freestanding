@@ -1,7 +1,7 @@
 #pragma once
 
 #include <cstddef>
-#include <typeinfo>
+#include <__type_info/type_info.hpp>
 
 namespace __cxxabiv1 {
 
@@ -16,6 +16,8 @@ struct search_general_state;
 struct search_general_res;
 
 struct dyn_cast_params;
+
+struct unambiguous_base_state;
 
 struct __fundamental_type_info: std::type_info {
     ~__fundamental_type_info() override;
@@ -38,13 +40,20 @@ struct __class_type_info: std::type_info {
     virtual search_above_res
     search_above_dst(dyn_cast_params const& params, search_above_state const& state) const noexcept;
 
-    virtual void
-    search_general(dyn_cast_params const& params, search_general_state const& state,
-    search_general_res& res) const noexcept;
+    virtual void search_general(
+        dyn_cast_params const& params, search_general_state const& state, search_general_res& res
+    ) const noexcept;
 
     search_above_res found_static_type_above(
         dyn_cast_params const& params, search_above_state const& state
     ) const noexcept;
+
+    bool __can_catch(
+        type_info const* thrown_type, bool is_ref, void*& asjusted_ptr
+    ) const noexcept override;
+
+    bool check_self(void* cur, bool is_public, unambiguous_base_state& state) const noexcept;
+    virtual bool has_unambiguous_public_base(void* cur, bool is_public, unambiguous_base_state& state) const noexcept;
 };
 
 struct __si_class_type_info: public __class_type_info {
@@ -56,9 +65,10 @@ struct __si_class_type_info: public __class_type_info {
     ) const noexcept override;
 
     virtual void search_general(
-        dyn_cast_params const& params, search_general_state const& state,
-        search_general_res& res
+        dyn_cast_params const& params, search_general_state const& state, search_general_res& res
     ) const noexcept override;
+
+    virtual bool has_unambiguous_public_base(void* cur, bool is_public, unambiguous_base_state& state) const noexcept override;
 };
 
 struct __base_class_type_info {
@@ -85,9 +95,10 @@ struct __vmi_class_type_info: __class_type_info {
     ) const noexcept override;
 
     virtual void search_general(
-        dyn_cast_params const& params, search_general_state const& state,
-        search_general_res& res
+        dyn_cast_params const& params, search_general_state const& state, search_general_res& res
     ) const noexcept override;
+
+    virtual bool has_unambiguous_public_base(void* cur, bool is_public, unambiguous_base_state& state) const noexcept override;
 };
 
 struct __pbase_type_info: std::type_info {
@@ -105,16 +116,32 @@ struct __pbase_type_info: std::type_info {
         __transaction_safe_mask = 0x20,
         __noexcept_mask         = 0x40
     };
+
+    bool __can_catch(
+        type_info const* thrown_type, bool is_ref, void*& asjusted_ptr
+    ) const noexcept override;
 };
 
 struct __pointer_type_info: __pbase_type_info {
     ~__pointer_type_info() override;
+
+    bool __can_catch(
+        type_info const* thrown_type, bool is_ref, void*& asjusted_ptr
+    ) const noexcept override;
+
+    bool can_catch_nested(type_info const* thrown_type, bool outer_no_const) const noexcept;
 };
 
 struct __pointer_to_member_type_info: __pbase_type_info {
     ~__pointer_to_member_type_info() override;
 
     __class_type_info const* __context;
+
+    bool __can_catch(
+        type_info const* thrown_type, bool is_ref, void*& asjusted_ptr
+    ) const noexcept override;
+
+    bool can_catch_nested(type_info const* thrown_type, bool outer_no_const) const noexcept;
 };
 
 }  // namespace __cxxabiv1

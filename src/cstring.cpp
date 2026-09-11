@@ -26,7 +26,7 @@ inline constexpr size_t get_address_space<T [[clang::address_space(N)]]> = N;
 template<class From, class To> using copy_addr_space_t = copy_addr_space<From, To>::type;
 
 template<class From, class To>
-static void do_memcpy(To* __restrict to, From* __restrict from, size_t n) {
+static void do_memcpy(To* __restrict to, From* __restrict from, size_t n) noexcept {
     auto d = to;
     auto s = from;
 
@@ -50,7 +50,7 @@ static void do_memcpy(To* __restrict to, From* __restrict from, size_t n) {
     if (n & 1) { __builtin_memcpy_inline(d, s, 1); }
 }
 
-template<class To> static void do_memset(To* to, int c, size_t n) {
+template<class To> static void do_memset(To* to, int c, size_t n) noexcept {
     auto d = reinterpret_cast<copy_addr_space_t<To, byte>*>(to);
 
     while (n >= 8) {
@@ -70,7 +70,7 @@ template<class To> static void do_memset(To* to, int c, size_t n) {
     if (n & 1) { __builtin_memset_inline(d, c, 1); }
 }
 
-template<class From, class To> static void do_memmove(To* to, From const* from, size_t n) {
+template<class From, class To> static void do_memmove(To* to, From const* from, size_t n) noexcept {
     auto d = reinterpret_cast<copy_addr_space_t<To, byte>*>(to);
     auto s = reinterpret_cast<copy_addr_space_t<From, byte const>*>(from);
 
@@ -122,6 +122,19 @@ byte* memcpy_p(
 byte* memmove_p(byte* to, byte const [[clang::address_space(1)]] * from, size_t sz) noexcept {
     std::do_memmove(to, from, sz);
     return to;
+}
+
+int memcmp(const void* s1, const void* s2, size_t n) {
+    const auto* p1 = static_cast<const unsigned char*>(s1);
+    const auto* p2 = static_cast<const unsigned char*>(s2);
+
+    for (size_t i = 0; i < n; ++i) {
+        if (p1[i] != p2[i]) {
+            return static_cast<int>(p1[i]) - static_cast<int>(p2[i]);
+        }
+    }
+
+    return 0;
 }
 
 void* memccpy(void* __restrict dest, void const* __restrict src, int c, size_t count) noexcept {

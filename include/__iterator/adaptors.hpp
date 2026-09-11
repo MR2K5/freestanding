@@ -413,15 +413,22 @@ struct __advance_fn {
     static constexpr iter_difference_t<I> operator()(I& i, iter_difference_t<I> n, S end) {
         assert(bidirectional_iterator<I> || n >= 0);
         if constexpr (sized_sentinel_for<S, I>) {
-            auto abs = [](auto x) {
-                return x < 0 ? -x : x;
-            };
-            if (auto const dist = abs(n) - abs(end - i); dist < 0) {
-                operator()(i, end);
-                return -dist;
+            auto dist = end - i;
+            if (n >= 0) {
+                if (n >= dist) {
+                    operator()(i, end);
+                    return n - dist;
+                }
+                operator()(i, n);
+                return 0;
+            } else {
+                if (n <= dist) {
+                    operator()(i, end);
+                    return n - dist;
+                }
+                operator()(i, n);
+                return 0;
             }
-            operator()(i, end);
-            return 0;
         } else {
             while (n > 0 && i != end) {
                 --n;

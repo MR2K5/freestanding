@@ -22,9 +22,8 @@ new_handler get_new_handler() noexcept {
     return new_handler_.load(memory_order::acquire);
 }
 
-#if _STD_HAS_HEAP
-
 extern "C" {
+#if _STD_HAS_HEAP
 
 static tlsf_t tlsf_;
 
@@ -42,14 +41,6 @@ void* calloc(size_t nmemb, size_t size) noexcept {
 void free(void* ptr) noexcept {
     tlsf_free(tlsf_, ptr);
 }
-void free_sized(void* ptr, [[maybe_unused]] size_t size) noexcept {
-    free(ptr);
-}
-void free_aligned_sized(
-    void* ptr, [[maybe_unused]] size_t alignment, [[maybe_unused]] size_t size
-) noexcept {
-    return free(ptr);
-}
 void* malloc(size_t size) noexcept {
     return tlsf_memalign(tlsf_, alignof(max_align_t), size);
 }
@@ -58,12 +49,40 @@ void* realloc(void* ptr, size_t size) noexcept {
     if (nw) memcpy(nw, ptr, tlsf_block_size(ptr));
     return nw;
 }
+
+#else
+
+void __std_init_heap(void*, size_t) noexcept {}
+void* aligned_alloc(size_t, size_t) noexcept {
+    return nullptr;
+}
+void* calloc(size_t, size_t) noexcept {
+    return nullptr;
+}
+void free(void*) noexcept {}
+
+void* malloc(size_t) noexcept {
+    return nullptr;
+}
+void* realloc(void*, size_t) noexcept {
+    return nullptr;
 }
 
 #endif
+void free_sized(void* ptr, [[maybe_unused]] size_t size) noexcept {
+    free(ptr);
+}
+void free_aligned_sized(
+    void* ptr, [[maybe_unused]] size_t alignment, [[maybe_unused]] size_t size
+) noexcept {
+    return free(ptr);
+}
+
+}  // extern "C"
+
 }  // namespace std
 
-[[gnu::weak]] void* operator new(size_t sz) {
+[[gnu::weak]] void* operator new([[maybe_unused]] size_t sz) {
     while (1) {
 #if _STD_HAS_HEAP
         void* p = malloc(sz);
@@ -83,7 +102,8 @@ void* realloc(void* ptr, size_t size) noexcept {
     }
 }
 
-[[gnu::weak]] void* operator new(size_t sz, std::align_val_t align) {
+[[gnu::weak]] void*
+operator new([[maybe_unused]] size_t sz, [[maybe_unused]] std::align_val_t align) {
     while (1) {
 #if _STD_HAS_HEAP
         void* p = aligned_alloc(size_t(align), sz);

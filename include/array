@@ -6,6 +6,7 @@
 
 #include <compare>
 #include <cstddef>
+#include <stdexcept>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -56,11 +57,11 @@ public:
 #if _STD_HAS_EH
 
     constexpr T& at(size_t n) {
-        if (n >= N) __throw_out_of_range("array::at");
+        if (n >= N) throw std::out_of_range("");
         return arr_[n];
     }
     constexpr T const& at(size_t n) const {
-        if (n >= N) __throw_out_of_range("array::at");
+        if (n >= N) std::out_of_range("");
         return arr_[n];
     }
 #else
@@ -117,8 +118,8 @@ public:
     constexpr T const& operator[](size_t) const noexcept { unreachable(); }
 
 #if _STD_HAS_EH
-    constexpr T& at(size_t) { __throw_out_of_range("array<0>::at"); }
-    constexpr T const& at(size_t) const { __throw_out_of_range("array<0>::at"); }
+    constexpr T& at(size_t) { throw std::out_of_range("array<0>::at"); }
+    constexpr T const& at(size_t) const { throw std::out_of_range("array<0>::at"); }
 #else
     constexpr T& at(size_t)             = delete;
     constexpr T const& at(size_t) const = delete;

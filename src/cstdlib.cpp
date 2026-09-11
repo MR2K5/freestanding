@@ -1,15 +1,13 @@
 #include <algorithm>
 #include <cassert>
 #include <cstddef>
-#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <cxxabi.h>
 
 #include <__algorithm/sort.hpp>
-#include <iterator>
+#include <exception>
 #include <numeric>
-#include <type_traits>
 
 using std::byte;
 
@@ -26,10 +24,15 @@ static constinit unsigned char qh_count = 0;
 
 // 3. Register Handler
 int at_quick_exit(void (*func)()) noexcept {
-    if (qh_count < 16) {
-        quick_handlers[qh_count] = func;
-        qh_count++;
-        return 0;  // Success
+    _TRY {
+        if (qh_count < 16) {
+            quick_handlers[qh_count] = func;
+            qh_count++;
+            return 0;  // Success
+        }
+    }
+    _CATCHALL {
+        std::terminate();
     }
     return 1;
 }

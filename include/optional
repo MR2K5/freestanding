@@ -652,4 +652,15 @@ template<class T> struct hash<optional<T>> {
     }
 };
 
+// TODO can we move to <exception>
+template<class E> constexpr optional<E const&> exception_ptr_cast(exception_ptr const& p) noexcept {
+#if _STD_HAS_EH
+    try {
+        rethrow_exception(p);
+    } catch (E const& e) { return e; }
+#else
+    return std::nullopt;
+#endif
+}
+
 }  // namespace std

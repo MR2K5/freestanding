@@ -4,6 +4,7 @@
 #include <__iterator/adaptors.hpp>
 #include <__ranges/core.hpp>
 #include <__string/char_traits.hpp>
+#include <stdexcept>
 
 namespace std {
 

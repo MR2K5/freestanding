@@ -17,6 +17,7 @@ endif
 host_cpu = host_machine.cpu_family()
 
 arch_overrides = files()
+extra_objects = []
 if fs.is_dir(host_cpu)
     subdir(host_cpu)
 endif
@@ -45,6 +46,7 @@ endforeach
 std = library(
     'std',
     sources: [final_sources, config_h],
+    objects: extra_objects,
     include_directories: std_inc,
     dependencies: std_deps,
 )

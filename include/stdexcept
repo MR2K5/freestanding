@@ -1,0 +1,64 @@
+#pragma once
+
+#include <exception>
+
+namespace std {
+
+class __string_except_base: public std::exception {
+public:
+    __string_except_base(char const*) noexcept {}
+    char const* what() const noexcept override { return ""; }
+};
+
+class logic_error: public __string_except_base {
+public:
+    using __string_except_base::__string_except_base;
+    char const* what() const noexcept override { return "logic_error"; }
+};
+
+class domain_error: public logic_error {
+public:
+    using logic_error::logic_error;
+    char const* what() const noexcept override { return "domain_error"; }
+};
+class invalid_argument: public logic_error {
+public:
+    using logic_error::logic_error;
+    char const* what() const noexcept override { return "invalid_argument"; }
+};
+class length_error: public logic_error {
+public:
+    using logic_error::logic_error;
+    char const* what() const noexcept override { return "length_error"; }
+};
+class out_of_range: public logic_error {
+public:
+    using logic_error::logic_error;
+    char const* what() const noexcept override { return "out_of_range"; }
+};
+
+class runtime_error: public __string_except_base {
+public:
+    using __string_except_base::__string_except_base;
+    char const* what() const noexcept override { return "runtime_error"; }
+};
+
+class range_error: public runtime_error {
+public:
+    using runtime_error::runtime_error;
+    char const* what() const noexcept override { return "range_error"; }
+};
+
+class overflow_error: public runtime_error {
+public:
+    using runtime_error::runtime_error;
+    char const* what() const noexcept override { return "overflow_error"; }
+};
+
+class underflow_error: public runtime_error {
+public:
+    using runtime_error::runtime_error;
+    char const* what() const noexcept override { return "underflow_error"; }
+};
+
+}  // namespace std

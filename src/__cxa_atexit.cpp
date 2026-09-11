@@ -1,5 +1,7 @@
+#include <__config.hpp>
 #include <cstddef>
 #include <cxxabi.h>
+#include <exception>
 
 extern "C" {
 // 1. CRITICAL: You must define this global symbol.
@@ -31,10 +33,15 @@ int __cxa_atexit(void (*destructor)(void*), void* arg, void*) noexcept {
 // 4. Optional: Call this in your shutdown loop if your system ever exits
 void __cxa_finalize(void*) noexcept {
     // Walk backward through the registry to honor LIFO execution order
-    while (__registry_count > 0) {
-        __registry_count--;
-        auto& entry = __destructor_registry[__registry_count];
-        if (entry.destructor) { entry.destructor(entry.arg); }
+    _TRY {
+        while (__registry_count > 0) {
+            __registry_count--;
+            auto& entry = __destructor_registry[__registry_count];
+            if (entry.destructor) { entry.destructor(entry.arg); }
+        }
+    }
+    _CATCHALL {
+        std::terminate();
     }
 }
 }

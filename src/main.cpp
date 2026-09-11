@@ -1,29 +1,17 @@
 
-#include <algorithm>
-#include <bit>
-#include <cstring>
-#include <cxxabi.h>
-#include <expected>
 
-#include <functional>
-#include <iterator>
-#include <ranges>
-#include <type_traits>
-#include <utility>
-#include <variant>
-
-char* str;
+int volatile write = 0;
 
 struct A {
-    int v;
+    ~A() { write = 1; }
 };
 
-[[gnu::used, gnu::retain]] int main() {
- constexpr int x = __ARM_FP;
-
-    using X = std::iterator_traits<char*>;
-}
-
-extern "C" void _start() {
-    main();
+extern "C" [[gnu::used, gnu::retain]] int main() {
+    try {
+        {
+            A a;
+            throw 7;
+        }
+    } catch (...) {}
+    return 0;
 }

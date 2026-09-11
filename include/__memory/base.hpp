@@ -26,7 +26,7 @@ template<class Ptr> concept has_elem_type = requires { typename ptr_traits_elem<
 template<class Ptr> struct pointer_traits {};
 template<class Ptr> requires __detail::has_elem_type<Ptr> struct pointer_traits<Ptr> {
     using pointer         = Ptr;
-    using element_type    =__detail::ptr_traits_elem<Ptr>::type;
+    using element_type    = __detail::ptr_traits_elem<Ptr>::type;
     using difference_type = decltype([] {
         if constexpr (requires { typename Ptr::difference_type; }) {
             return type_identity<typename Ptr::difference_type>{};
@@ -102,7 +102,7 @@ template<class T>
 constexpr T* construct_at(T* loc, auto&&... as)
     requires(!is_unbounded_array_v<T>) && requires(void* p) { ::new (p) T(FWD(as)...); } {
     static_assert(!is_array_v<T> || sizeof...(as) == 0);
-    if constexpr (is_array_v<T>) { return ::new (static_cast<void*>(loc)) T(FWD(as)...); }
+    return ::new (static_cast<void*>(loc)) T(FWD(as)...);
 }
 
 template<class T> constexpr void destroy_at(T* loc) noexcept {

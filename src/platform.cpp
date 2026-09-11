@@ -19,7 +19,7 @@ namespace {
 enum class state : uint32_t { unlocked, locked, waiting };
 }
 
-int __cxxabiv1::__cxa_guard_acquire(int64_t* p) noexcept {
+int abi::__cxa_guard_acquire(int64_t* p) noexcept {
     std::atomic_ref lock(*reinterpret_cast<state*>(p));
     std::atomic_ref flag(*reinterpret_cast<uint8_t*>(p));
 
@@ -44,7 +44,7 @@ int __cxxabiv1::__cxa_guard_acquire(int64_t* p) noexcept {
     }
 }
 
-void __cxxabiv1::__cxa_guard_release(int64_t* p) noexcept {
+void abi::__cxa_guard_release(int64_t* p) noexcept {
     std::atomic_ref lock(*reinterpret_cast<state*>(p));
     std::atomic_ref flag(*reinterpret_cast<uint8_t*>(p));
 
@@ -54,7 +54,7 @@ void __cxxabiv1::__cxa_guard_release(int64_t* p) noexcept {
     if (old == state::waiting) { lock.notify_all(); }
 }
 
-void __cxxabiv1::__cxa_guard_abort(int64_t* p) noexcept {
+void abi::__cxa_guard_abort(int64_t* p) noexcept {
     std::atomic_ref lock(*reinterpret_cast<state*>(p));
 
     auto old = lock.exchange(state::unlocked, std::memory_order::release);
