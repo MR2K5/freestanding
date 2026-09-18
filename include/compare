@@ -213,7 +213,7 @@ template<> struct common_cmpcat_base<6u> {
 }  // namespace __detail
 
 template<class... Ts>
-struct common_comparison_category:__detail::common_cmpcat_base<
+struct common_comparison_category: __detail::common_cmpcat_base<
                                        (0u | ...
                                         | (is_same_v<Ts, strong_ordering>    ? 0u
                                            : is_same_v<Ts, weak_ordering>    ? 4u
@@ -242,21 +242,21 @@ concept __compare_as = same_as<common_comparison_category_t<T, Cat>, Cat>;
 
 template<class T, class Cat = partial_ordering>
 concept three_way_comparable =
-   __detail::__weakly_equality_comparable_with<T, T> &&__detail::__partially_ordered_with<T, T>
+    __detail::__weakly_equality_comparable_with<T, T> && __detail::__partially_ordered_with<T, T>
     && requires(remove_reference_t<T> const& a, remove_reference_t<T> const& b) {
-           { a <=> b } ->__detail::__compare_as<Cat>;
+           { a <=> b } -> __detail::__compare_as<Cat>;
        };
 
 template<class T, class U, class Cat = std::partial_ordering>
 concept three_way_comparable_with =
     three_way_comparable<T, Cat> && three_way_comparable<U, Cat>
-    &&__detail::__comparison_common_type_with<T, U>
+    && __detail::__comparison_common_type_with<T, U>
     && three_way_comparable<
         common_reference_t<remove_reference_t<T> const&, remove_reference_t<U> const&>, Cat>
-    &&__detail::__weakly_equality_comparable_with<T, U> &&__detail::__partially_ordered_with<T, U>
+    && __detail::__weakly_equality_comparable_with<T, U> && __detail::__partially_ordered_with<T, U>
     && requires(remove_reference_t<T> const& t, remove_reference_t<U> const& u) {
-           { t <=> u } ->__detail::__compare_as<Cat>;
-           { u <=> t } ->__detail::__compare_as<Cat>;
+           { t <=> u } -> __detail::__compare_as<Cat>;
+           { u <=> t } -> __detail::__compare_as<Cat>;
        };
 
 struct compare_three_way {
@@ -320,6 +320,13 @@ constexpr auto lexicographical_compare_three_way(I1 f1, I1 l1, I2 f2, I2 l2, Cmp
     return !exhaust1 ? std::strong_ordering::greater
          : !exhaust2 ? std::strong_ordering::less
                      : std::strong_ordering::equal;
+}
+
+template<class InputIt1, class InputIt2>
+constexpr auto lexicographical_compare_three_way(
+    InputIt1 first1, InputIt1 last1, InputIt2 first2, InputIt2 last2
+) {
+    return lexicographical_compare_three_way(first1, last1, first2, last2, compare_three_way{});
 }
 
 // TODO order CPOs

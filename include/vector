@@ -1,0 +1,530 @@
+#pragma once
+
+#include <__algorithm/minmax.hpp>
+#include <__algorithm/mutating.hpp>
+#include <__memory/algorithms.hpp>
+#include <__memory/base.hpp>
+#include <__ranges/as_rvalue.hpp>
+#include <__ranges/core.hpp>
+#include <__ranges/repeat.hpp>
+#include <__ranges/single.hpp>
+#include <__ranges/take_view.hpp>
+#include <__ranges/transform_view.hpp>
+#include <cassert>
+#include <concepts>
+#include <experimental/scope>
+#include <functional>
+#include <iterator>
+#include <stdexcept>
+#include <type_traits>
+#include <utility>
+
+namespace std {
+
+template<class T, class A = allocator<T>> class vector {
+    using Atr = allocator_traits<A>;
+
+    static constexpr bool alloc_eq = Atr::is_always_equal::value;
+    static constexpr bool pocca    = Atr::propagate_on_container_copy_assignment::value;
+    static constexpr bool pocma    = Atr::propagate_on_container_move_assignment::value;
+    static constexpr bool pocs     = Atr::propagate_on_container_swap::value;
+
+    static constexpr auto uninit_move_if_noexcept = conditional_t<
+        is_nothrow_move_constructible_v<T> || !is_copy_constructible_v<T>,
+        decltype(ranges::uninitialized_move), decltype(ranges::uninitialized_copy)>();
+
+public:
+    using value_type             = T;
+    using allocator_type         = A;
+    using pointer                = allocator_traits<A>::pointer;
+    using const_pointer          = allocator_traits<A>::const_pointer;
+    using reference              = value_type&;
+    using const_reference        = value_type const&;
+    using size_type              = Atr::size_type;
+    using difference_type        = Atr::difference_type;
+    using iterator               = __detail::__pointer_wrapper<T*>;
+    using const_iterator         = __detail::__pointer_wrapper<T const*>;
+    using reverse_iterator       = std::reverse_iterator<iterator>;
+    using const_reverse_iterator = std::reverse_iterator<const_iterator>;
+
+    constexpr vector() noexcept(noexcept(A())) = default;
+    constexpr explicit vector(A const& a) noexcept: ptr_(nullptr), size_(0), cap_(0), alloc_(a) {}
+
+    constexpr explicit vector(size_type n, A const& a = A()): vector(a) {
+        __allocate_ctor(n);
+        ranges::uninitialized_value_construct_n(begin(), n, alloc_);
+        size_ = n;
+    }
+
+    constexpr vector(size_type n, T const& value, A const& a = A()): vector(a) {
+        __allocate_ctor(n);
+        ranges::uninitialized_fill_n(begin(), n, value, alloc_);
+        size_ = n;
+    }
+
+    template<input_iterator InputIterator>
+    constexpr vector(InputIterator first, InputIterator last, A const& a = A())
+        : vector(from_range, ranges::subrange(std::move(first), std::move(last)), a) {}
+
+    template<ranges::__detail::container_compatible_range<T> R>
+    constexpr vector(from_range_t, R&& rg, A const& a = A()): vector(a) {
+        // This is a delegating constructor, so the dtor is run in case of an exception
+        if constexpr (ranges::approximately_sized_range<R>) {
+            reserve(ranges::reserve_hint(rg));
+        } else if constexpr (ranges::forward_range<R>) {
+            reserve(ranges::distance(rg));
+        }
+
+        // safe bc of delegation, as dtor is called
+        ranges::for_each(rg, [this](auto&& x) { push_back(FWD(x)); });
+    }
+
+    constexpr vector(vector const& x)
+        : vector(x, Atr::select_on_container_copy_construction(x.alloc_)) {}
+
+    constexpr vector(vector&& o) noexcept
+        : ptr_(std::exchange(o.ptr_, nullptr)), size_(std::exchange(o.size_, 0)),
+          cap_(std::exchange(o.cap_, 0)), alloc_(std::move(o.alloc_)) {}
+
+    constexpr vector(vector const& o, type_identity_t<A> const& a): vector(a) {
+        __allocate_ctor(o.size_);
+        ranges::uninitialized_copy(o.begin(), o.end(), begin(), unreachable_sentinel, alloc_);
+        size_ = o.size_;
+    }
+
+    constexpr vector(vector&& o, type_identity_t<A> const& a): vector(a) {
+        if (alloc_eq || o.alloc_ == alloc_) {
+            ptr_  = std::exchange(o.ptr_, nullptr);
+            size_ = std::exchange(o.size_, 0);
+            cap_  = std::exchange(o.cap_, 0);
+        } else {
+            __allocate_ctor(o.size_);
+            ranges::uninitialized_move_n(o.begin(), o.size_, begin(), unreachable_sentinel, alloc_);
+            size_ = o.size_;
+        }
+    }
+
+    constexpr vector(initializer_list<T> il, A const& a = A()): vector(il.begin(), il.end(), a) {}
+
+    constexpr ~vector() { __clear_dealloc(); }
+
+    constexpr vector& operator=(vector const& x) {
+        bool needs_to_realloc = x.size_ > cap_ || (pocca && !alloc_eq && alloc_ != x.alloc_);
+        if (needs_to_realloc) {
+            vector tmp(x, pocca ? x.alloc_ : alloc_);
+            __swap(tmp);
+
+            using std::swap;
+            if constexpr (pocca) swap(tmp.alloc_, alloc_);
+        } else {
+            auto [in, out] = ranges::copy_n(x.begin(), ranges::min(size_, x.size_), begin());
+            if (size_ < x.size_) {  // Do we need to add or destroy
+                ranges::uninitialized_copy(in, x.end(), out, unreachable_sentinel, alloc_);
+            } else {
+                ranges::destroy(out, end(), alloc_);
+            }
+            size_ = x.size_;
+            if constexpr (pocca) alloc_ = x.alloc_;
+        }
+        return *this;
+    }
+
+    constexpr vector& operator=(vector&& x) noexcept(pocma || alloc_eq) {
+        bool needs_to_realloc = !pocma && !alloc_eq && alloc_ != x.alloc_;
+
+        if (needs_to_realloc) {
+            vector tmp(std::move(x), alloc_);
+            __swap(tmp);
+        } else {
+            clear();
+            if (ptr_) Atr::deallocate(alloc_, ptr_, cap_);
+            ptr_  = std::exchange(x.ptr_, nullptr);
+            size_ = std::exchange(x.size_, 0);
+            cap_  = std::exchange(x.cap_, 0);
+            if constexpr (pocma) alloc_ = std::move(x.alloc_);
+        }
+        return *this;
+    }
+
+    constexpr vector& operator=(initializer_list<T> il) {
+        assign(il);
+        return *this;
+    }
+    template<input_iterator InputIterator>
+    constexpr void assign(InputIterator first, InputIterator last) {
+        assign_range(ranges::subrange(std::move(first), std::move(last)));
+    }
+
+    template<ranges::__detail::container_compatible_range<T> R>
+    constexpr void assign_range(R&& rg) {
+        static_assert(assignable_from<T&, ranges::range_reference_t<R>>);
+        size_type est = 0;
+        if constexpr (ranges::approximately_sized_range<R>)
+            est = ranges::reserve_hint(rg);
+        else if constexpr (ranges::forward_range<R>)
+            est = ranges::distance(rg);
+
+        if (est > cap_) {
+            vector tmp(from_range, FWD(rg), alloc_);
+            __swap(tmp);
+            return;
+        }
+
+        // We can copy-assign at most n elements
+        auto [in, out] = ranges::copy(rg | views::take(size_), begin());
+
+        if (out < end()) {
+            ranges::destroy(out, end(), alloc_);
+            size_ = out - begin();
+        } else {
+            // We can copy-construct until cap_
+            auto [in2, out2] =
+                ranges::uninitialized_copy(in.base(), ranges::end(rg), out, __end_cap(), alloc_);
+            size_ = out2 - begin();
+
+            // If input is not exhausted, just push_back
+            for (; in2 != ranges::end(rg); ++in2) push_back(*in2);
+        }
+    }
+
+    constexpr void assign(size_type n, T const& u) {
+        assign_range(u | views::repeat(n) | views::transform(&reference_wrapper<T const>::get));
+    }
+    constexpr void assign(initializer_list<T> il) { assign_range(il); }
+    constexpr allocator_type get_allocator() const noexcept { return alloc_; }
+
+    // iterators
+    constexpr iterator begin() noexcept { return iterator(std::to_address(ptr_)); }
+    constexpr const_iterator begin() const noexcept {
+        return const_iterator(std::to_address(ptr_));
+    }
+    constexpr iterator end() noexcept { return iterator(std::to_address(ptr_) + size_); }
+    constexpr const_iterator end() const noexcept {
+        return const_iterator(std::to_address(ptr_) + size_);
+    }
+    constexpr reverse_iterator rbegin() noexcept { return reverse_iterator(end()); }
+    constexpr const_reverse_iterator rbegin() const noexcept {
+        return const_reverse_iterator(end());
+    }
+    constexpr reverse_iterator rend() noexcept { return reverse_iterator(begin()); }
+    constexpr const_reverse_iterator rend() const noexcept {
+        return const_reverse_iterator(begin());
+    }
+
+    constexpr const_iterator cbegin() const noexcept { return begin(); }
+    constexpr const_iterator cend() const noexcept { return end(); }
+    constexpr const_reverse_iterator crbegin() const noexcept { return rbegin(); }
+    constexpr const_reverse_iterator crend() const noexcept { return rend(); }
+
+    // [vector.capacity], capacity
+    constexpr bool empty() const noexcept { return size() == 0; }
+    constexpr size_type size() const noexcept { return size_; }
+    constexpr size_type max_size() const noexcept { return Atr::max_size(alloc_); }
+    constexpr size_type capacity() const noexcept { return cap_; }
+    constexpr void resize(size_type sz) { __resize(sz); }
+    constexpr void resize(size_type sz, T const& c) { __resize(sz, c); }
+
+    constexpr void reserve(size_type n) { __reserve<false>(n); }
+    constexpr void shrink_to_fit() { __reserve<true>(size_); }
+
+    // Shrinks capacity, not size. n < size_ is undefined
+    template<bool Shrink> constexpr void __reserve(size_type n) {
+        if constexpr (Shrink) {
+            if (n == 0) {
+                __clear_dealloc();
+                return;
+            }
+        }
+        if (Shrink ? n == cap_ : n <= cap_) return;
+
+        auto [p, c] = Atr::allocate_at_least(alloc_, n);
+        auto _      = experimental::scope_fail([&] noexcept { Atr::deallocate(alloc_, p, c); });
+        uninit_move_if_noexcept(begin(), end(), std::to_address(p), unreachable_sentinel, alloc_);
+
+        auto s = size_;
+        __clear_dealloc();
+        ptr_  = p;
+        size_ = s;
+        cap_  = c;
+    }
+
+    constexpr void __resize(size_type n, auto const&... c) {
+        constexpr auto uninit_ctor = conditional_t<
+            sizeof...(c) == 0, decltype(ranges::uninitialized_value_construct),
+            decltype(ranges::uninitialized_fill)>();
+        if (n <= cap_) {
+            if (n < size_) {
+                ranges::destroy(begin() + n, end(), alloc_);
+            } else {
+                uninit_ctor(end(), begin() + n, c..., alloc_);
+            }
+            size_ = n;
+            return;
+        }
+
+        vector tmp(alloc_);
+        tmp.reserve(n);
+
+        uninit_ctor(tmp.begin() + size_, tmp.begin() + n, c..., tmp.alloc_);
+
+        auto _ = experimental::scope_fail([&tmp, sz = size_, n] noexcept {
+            ranges::destroy(tmp.begin() + sz, tmp.begin() + n, tmp.alloc_);
+        });
+
+        uninit_move_if_noexcept(begin(), end(), tmp.begin(), tmp.begin() + size_, tmp.alloc_);
+        tmp.size_ = n;
+
+        __swap(tmp);
+    }
+
+    // element access
+    constexpr reference operator[](size_type n) {
+        assert(n < size_);
+        return ptr_[n];
+    }
+    constexpr const_reference operator[](size_type n) const {
+        assert(n < size_);
+        return ptr_[n];
+    }
+#if _STD_HAS_EH
+    constexpr reference at(size_type n) {
+        if (n >= size_) throw out_of_range("vector::at");
+        return ptr_[n];
+    }
+    constexpr const_reference at(size_type n) const {
+        if (n >= size_) throw out_of_range("vector::at");
+        return ptr_[n];
+    }
+#else
+    constexpr reference at(size_type n)             = _DELETE_NO_EXCEPTIONS;
+    constexpr const_reference at(size_type n) const = _DELETE_NO_EXCEPTIONS;
+#endif
+    constexpr reference front() { return (*this)[0]; }
+    constexpr const_reference front() const { return (*this)[0]; }
+    constexpr reference back() { return (*this)[size_ - 1]; }
+    constexpr const_reference back() const { return (*this)[size_ - 1]; }
+
+    // [vector.data], data access
+    constexpr T* data() noexcept { return std::to_address(ptr_); }
+    constexpr T const* data() const noexcept { return std::to_address(ptr_); }
+
+    [[nodiscard]] constexpr size_type __calculate_growth(size_type target_size) const {
+        size_type const max_cap = Atr::max_size(alloc_);
+
+        // Prevent overflow: if cap_ is already large, cap_ + (cap_ >> 1) could wrap
+        if (cap_ > max_cap - (cap_ >> 1)) { return max_cap; }
+
+        // 1.5x integer growth: cap + (cap / 2)
+        // Seed with 1 when empty
+        size_type const geometric = (cap_ < 4) ? cap_ + 4 : cap_ + (cap_ >> 1);
+
+        // Pick whichever is larger: the geometric step or the exact target
+        return std::ranges::max(target_size, geometric);
+    }
+
+    // [vector.modifiers], modifiers
+    template<class... Args> constexpr reference emplace_back(Args&&... args) {
+        if (size_ + 1 <= cap_) {
+            Atr::construct(alloc_, data() + size_, FWD(args)...);
+            size_ += 1;
+            return back();
+        }
+
+        vector tmp(alloc_);
+        tmp.reserve(__calculate_growth(cap_ + 1));
+
+        Atr::construct(alloc_, tmp.data() + size_, FWD(args)...);
+        auto _ =
+            experimental::scope_fail([&] noexcept { Atr::destroy(alloc_, tmp.data() + size_); });
+
+        uninit_move_if_noexcept(begin(), end(), tmp.begin(), unreachable_sentinel, alloc_);
+        tmp.size_ = size_ + 1;
+
+        __swap(tmp);
+        return back();
+    }
+
+    constexpr void push_back(T const& x) { emplace_back(x); }
+
+    constexpr void push_back(T&& x) { emplace_back(std::move(x)); }
+
+    template<ranges::__detail::container_compatible_range<T> R>
+    constexpr void append_range(R&& rg) {
+        size_type est = 0;
+        if constexpr (ranges::approximately_sized_range<R>)
+            est = ranges::reserve_hint(rg);
+        else if constexpr (ranges::forward_range<R>)
+            est = ranges::distance(rg);
+
+        constexpr bool size_known =
+            ranges::sized_range<R>
+            || (!ranges::approximately_sized_range<R> && ranges::forward_range<R>);
+
+        if constexpr (size_known) {
+            if (cap_ < size_ + est) {
+                vector tmp(alloc_);
+                tmp.reserve(__calculate_growth(size_ + est));
+
+                ranges::uninitialized_copy(
+                    ranges::begin(rg), ranges::end(rg), tmp.begin() + size_, unreachable_sentinel,
+                    alloc_
+                );
+                auto _ = experimental::scope_fail([&] {
+                    ranges::destroy_n(tmp.begin() + size_, est, alloc_);
+                });
+                uninit_move_if_noexcept(begin(), end(), tmp.begin(), tmp.begin() + size_, alloc_);
+                tmp.size_ = size_ + est;
+
+                __swap(tmp);
+                return;
+            }
+        }
+
+        // Try appending at end (succeeds if size_known)
+        auto [in, out] = ranges::uninitialized_copy(
+            ranges::begin(rg), ranges::end(rg), end(), __end_cap(), alloc_
+        );
+        auto added = out - end();
+        size_      = out - begin();
+        if (in == ranges::end(rg)) return;
+
+        auto _ = experimental::scope_fail([&] {
+            for (; added != 0; --added) pop_back();
+        });
+
+        // We don't know the actual size. allocate rest to a new vector and append that
+        vector tmp(alloc_);
+        tmp.reserve(added > est ? 0 : est - added);
+        for (; in != ranges::end(rg); ++in) tmp.emplace_back(*in);
+        append_range(tmp | views::as_rvalue);
+    }
+
+    constexpr void pop_back() {
+        assert(size_ > 0);
+        ranges::destroy_at(end() - 1, alloc_);
+        size_ -= 1;
+    }
+
+    template<class... Args> constexpr iterator emplace(const_iterator position, Args&&... args) {
+        if (position == end()) {
+            emplace_back(FWD(args)...);
+            return end() - 1;
+        }
+
+        T tmp(FWD(args)...);
+        return insert(position, std::move(tmp));
+    }
+    constexpr iterator insert(const_iterator position, T const& x) {
+        return insert_range(position, ranges::subrange(std::addressof(x), std::addressof(x) + 1));
+    }
+    constexpr iterator insert(const_iterator position, T&& x) {
+        auto p = std::addressof(x);
+        return insert_range(
+            position, ranges::subrange(make_move_iterator(p), make_move_iterator(p + 1))
+        );
+    }
+    constexpr iterator insert(const_iterator position, size_type n, T const& x) {
+        return insert_range(
+            position,
+            views::repeat(std::cref(x), n) | views::transform(&reference_wrapper<T const>::get)
+        );
+    }
+    template<class InputIterator>
+    constexpr iterator insert(const_iterator position, InputIterator first, InputIterator last) {
+        return insert_range(position, ranges::subrange(std::move(first), std::move(last)));
+    }
+
+    template<ranges::__detail::container_compatible_range<T> R>
+    constexpr iterator insert_range(const_iterator position, R&& rg) {}
+
+    constexpr iterator insert(const_iterator position, initializer_list<T> il) {
+        return insert_range(position, il);
+    }
+
+    constexpr iterator erase(const_iterator position) {
+        erase(position, position + 1);
+    }
+    constexpr iterator erase(const_iterator first, const_iterator last) {
+        assert(first >= cbegin() && first <= last && last <= cend());
+        difference_type const idx   = first - cbegin();
+        difference_type const count = last - first;
+
+        if (count > 0) {
+            iterator const p_first = begin() + idx;
+            iterator const p_last  = p_first + count;
+
+            // Shift trailing elements leftwards over the erased range
+            iterator const new_end = ranges::move(p_last, end(), p_first).out;
+
+            // Destroy the moved-from tail elements
+            ranges::destroy(new_end, end(), alloc_);
+            size_ -= count;
+        }
+
+        return begin() + idx;
+    }
+
+    constexpr void swap(vector& o) noexcept(
+        allocator_traits<A>::propagate_on_container_swap::value
+        || allocator_traits<A>::is_always_equal::value
+    ) {
+        __swap(o);
+        if constexpr (pocs) {
+            using std::swap;
+            swap(alloc_, o.alloc_);
+        } else {
+            assert(alloc_ == o.alloc_);
+        }
+    }
+
+    constexpr void clear() noexcept {
+        ranges::destroy_n(begin(), size_, alloc_);
+        size_ = 0;
+    }
+
+private:
+    pointer ptr_                                = nullptr;
+    size_type size_                             = 0;
+    size_type cap_                              = 0;
+    [[no_unique_address]] allocator_type alloc_ = allocator_type();
+
+    iterator __end_cap() noexcept { return iterator(begin() + cap_); }
+    const_iterator __end_cap() const noexcept { return const_iterator(begin() + cap_); }
+
+    constexpr void __allocate_ctor(size_type n) {
+        if (n != 0) {
+            allocation_result r = Atr::allocate_at_least(alloc_, n);
+            ptr_                = r.ptr;
+            cap_                = r.count;
+        }
+    }
+
+    void __swap(vector& o) noexcept {
+        using std::swap;
+        swap(ptr_, o.ptr_);
+        swap(size_, o.size_);
+        swap(cap_, o.cap_);
+    }
+
+    void __clear_dealloc() noexcept {
+        ranges::destroy(begin(), end(), alloc_);
+        if (ptr_ != nullptr) Atr::deallocate(alloc_, ptr_, cap_);
+        ptr_  = nullptr;
+        size_ = 0;
+        cap_  = 0;
+    }
+};
+
+template<class InputIterator, class A = allocator<iter_value_t<InputIterator>>>
+vector(InputIterator, InputIterator, A = A()) -> vector<iter_value_t<InputIterator>, A>;
+
+template<ranges::input_range R, class A = allocator<ranges::range_value_t<R>>>
+vector(from_range_t, R&&, A = A()) -> vector<ranges::range_value_t<R>, A>;
+
+template<class T, class Allocator>
+constexpr void
+swap(vector<T, Allocator>& x, vector<T, Allocator>& y) noexcept(noexcept(x.swap(y))) {
+    x.swap(y);
+}
+
+}  // namespace std

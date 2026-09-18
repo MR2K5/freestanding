@@ -7,11 +7,7 @@
 
 namespace std::ranges {
 
-template<class T> constexpr T __div_ceil(T x, T y) noexcept {
-    T result = x / y;
-    if (x % y > 0) { ++result; }
-    return result;
-}
+
 
 template<class Base> struct __stride_view_iter_cat {};
 

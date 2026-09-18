@@ -56,9 +56,10 @@ extern "C" [[gnu::naked]] void default_handler() {
 // uninitialized stack or emit VFP instructions before the FPU is active.
 extern "C" [[gnu::naked]] void reset_handler() {
     __asm__ volatile(
-        R"(.syntax unified
-        .thumb
-
+        R"(
+        .cfi_undefined lr
+        mov r7, #0
+        mov lr, r7
         @ 1. Enable FPU (CP10 and CP11 Full Access via SCB->CPACR: 0xE000ED88)
         ldr r0, =0xE000ED88
         ldr r1, [r0]
@@ -66,31 +67,31 @@ extern "C" [[gnu::naked]] void reset_handler() {
         str r1, [r0]
         dsb
         isb
-        eor lr,lr,lr
 
         b _start2
+        
     )"
     );
 }
 
-extern "C" [[gnu::used]] void _start2() noexcept {
+extern "C" [[gnu::used, noreturn]] void _start2() noexcept {
     std::memcpy(__data_start, __data_load, __data_end - __data_start);
     std::memset(__bss_start, 0, __bss_end - __bss_start);
 
     std::memcpy(__tdata_start, __tdata_load, __tdata_end - __tdata_start);
     std::memset(__tbss_start, 0, __tbss_end - __tbss_start);
+    
+    __std_init_heap(__heap_start, __heap_end - __heap_start);
 
     for (auto x = __init_array_start; x != __init_array_end; ++x) { (*x)(); }
 
-    __std_init_heap(__heap_start, __heap_end - __heap_start);
+    int r = main();
 
-    main();
-
-    __cxxabiv1::__cxa_finalize(nullptr);
+    std::exit(r);
 }
 
-extern "C" [[gnu::naked]] void* __aeabi_read_tp() noexcept {
-    asm volatile(R"(
+extern "C" [[gnu::naked, gnu::pure]] void* __aeabi_read_tp() noexcept {
+    asm(R"(
         ldr r0, =__main_tcb
         bx lr
     )");

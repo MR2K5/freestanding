@@ -57,6 +57,10 @@ template<class Enum> constexpr std::underlying_type_t<Enum> to_underlying(Enum e
     __builtin_unreachable();
 }
 
+constexpr auto& __as_lvalue(auto&& t) noexcept {
+    return static_cast<decltype(t)&>(t);
+}
+
 template<class T>
 constexpr void swap(T& a, T& b) noexcept(
     std::is_nothrow_move_constructible<T>::value && std::is_nothrow_move_assignable<T>::value
@@ -144,7 +148,7 @@ template<auto V> struct nontype_t {
 template<auto V> inline constexpr nontype_t<V> nontype{};
 
 template<class T> struct tuple_size;
-template<class T> inline constexpr bool tuple_size_v = tuple_size<T>::value;
+template<class T> inline constexpr size_t tuple_size_v = tuple_size<T>::value;
 template<class T> struct tuple_size<T const>: integral_constant<size_t, tuple_size_v<T>> {};
 template<class T> struct tuple_size<T volatile>: integral_constant<size_t, tuple_size_v<T>> {};
 template<class T>

@@ -1,0 +1,131 @@
+#pragma once
+// code: language=c++
+
+#include <__config.hpp>
+#include <__memory/base.hpp>
+#include <exception>
+#include <type_traits>
+
+namespace std::experimental {
+
+namespace __detail {
+template<class EF, class Fn, bool Override = false>
+static constexpr auto&& forward_if_noexcept(Fn& x) {
+    if constexpr (is_nothrow_constructible_v<EF, Fn> && !Override) {
+        return FWD(x);
+    } else {
+        return x;
+    }
+}
+}  // namespace __detail
+
+template<class EF> class scope_fail {
+    static_assert(std::is_invocable_v<remove_reference_t<EF>>);
+
+public:
+    void operator=(scope_fail const&) = delete;
+    scope_fail(scope_fail const&)     = delete;
+
+    template<class Fn>
+    requires(!is_same_v<scope_fail, remove_cvref_t<Fn>> && is_constructible_v<EF, Fn>)
+    constexpr explicit scope_fail(
+        Fn&& fn
+    ) noexcept(is_nothrow_constructible_v<EF, Fn> || is_nothrow_constructible_v<EF, Fn&>) try
+        : func_(__detail::forward_if_noexcept<EF, Fn, is_lvalue_reference_v<Fn>>(fn)),
+          ue_(std::uncaught_exceptions()), active_(true) {
+    } catch (...) { fn(); }
+
+    constexpr scope_fail(scope_fail&& o) noexcept(
+        is_nothrow_move_constructible_v<EF> || is_nothrow_copy_constructible_v<EF>
+    ) requires is_copy_constructible_v<EF> || is_nothrow_move_constructible_v<EF>
+        : func_(__detail::forward_if_noexcept<EF, EF>(o.func_)), ue_(o.ue_), active_(o.active_) {
+        o.release();
+    }
+
+    constexpr void release() noexcept { active_ = false; }
+
+    constexpr ~scope_fail() {
+        if (active_ && std::uncaught_exceptions() > ue_) func_();
+    }
+
+private:
+    [[no_unique_address]] EF func_;
+    int ue_;
+    bool active_;
+};
+
+template<class EF> scope_fail(EF) -> scope_fail<EF>;
+
+template<class EF> class scope_success {
+public:
+    void operator=(scope_success const&) = delete;
+    scope_success(scope_success const&)  = delete;
+
+    template<class Fn>
+    requires(!is_same_v<scope_success, remove_cvref_t<Fn>> && is_constructible_v<EF, Fn>)
+    constexpr explicit scope_success(
+        Fn&& fn
+    ) noexcept(is_nothrow_constructible_v<EF, Fn> || is_nothrow_constructible_v<EF, Fn&>)
+        : func_(__detail::forward_if_noexcept<EF, Fn, is_lvalue_reference_v<Fn>>(fn)),
+          active_(true), ue_(std::uncaught_exceptions()) {}
+
+    constexpr scope_success(scope_success&& o) noexcept(
+        is_nothrow_move_constructible_v<EF> || is_nothrow_copy_constructible_v<EF>
+    ) requires is_copy_constructible_v<EF> || is_nothrow_move_constructible_v<EF>
+        : func_(__detail::forward_if_noexcept<EF, EF>(o.func_)), active_(o.active_),
+          ue_(std::uncaught_exceptions()) {
+        o.release();
+    }
+
+    constexpr void release() noexcept { active_ = false; }
+
+    constexpr ~scope_success() noexcept(noexcept(func_())) {
+        if (active_ && std::uncaught_exceptions() <= ue_) func_();
+    }
+
+private:
+    [[no_unique_address]] EF func_;
+    int ue_;
+    bool active_;
+};
+
+template<class EF> scope_success(EF) -> scope_success<EF>;
+
+template<class EF> class scope_exit {
+    static_assert(std::is_invocable_v<remove_reference_t<EF>>);
+
+public:
+    scope_exit(scope_exit const&)     = delete;
+    void operator=(scope_exit const&) = delete;
+
+    template<class Fn>
+    requires(!is_same_v<remove_cvref_t<Fn>, scope_exit> && is_constructible_v<EF, Fn>)
+    constexpr explicit scope_exit(
+        Fn&& fn
+    ) noexcept(is_nothrow_constructible_v<EF, Fn> || is_nothrow_constructible_v<EF, Fn&>) try
+        : func_(__detail::forward_if_noexcept<EF, Fn, is_lvalue_reference_v<Fn>>(fn)),
+          active_(true) {
+    } catch (...) {
+        fn();
+        throw;
+    }
+
+    constexpr scope_exit(scope_exit&& o) noexcept(
+        is_nothrow_move_constructible_v<EF> || is_nothrow_copy_constructible_v<EF>
+    ) requires is_nothrow_move_constructible_v<EF> || is_copy_constructible_v<EF>
+        : func_(__detail::forward_if_noexcept<EF, EF>(o.func_)), active_(o.active_) {}
+
+    constexpr void release() noexcept { active_ = false; }
+
+    constexpr ~scope_exit() {
+        if (active_) func_();
+    }
+
+private:
+    [[no_unique_address]] EF func_;
+    bool active_;
+};
+
+template<class EF> scope_exit(EF) -> scope_exit<EF>;
+
+}  // namespace std::experimental

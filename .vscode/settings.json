@@ -15,5 +15,6 @@
     "lldb.showDisassembly": "auto",
     "lldb.dereferencePointers": true,
     "lldb.consoleMode": "commands",
+    "cmake.ignoreCMakeListsMissing": true,
     // "lldb-dap.executable-path": "/home/massimo/llvm/bin/lldb-dap"
 }

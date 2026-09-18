@@ -7,15 +7,4 @@
 - atomic: __cpu_relax, sleep states for wait/notify?, atomic_flag if no other atomics exist
 
 views:
-
-- join_with
-- lazy_split
-- split
-- common
-- chunk
-- chunk_by
-- cartesian_product
-- cache_latest
-- as_input
-
-
+- done

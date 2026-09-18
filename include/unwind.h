@@ -107,11 +107,11 @@ typedef _Unwind_Reason_Code (*PersonalityRoutine)(
 
 extern "C" {
 _Unwind_Reason_Code
-__aeabi_unwind_cpp_pr0(_Unwind_State state, _Unwind_Control_Block* ucbp, _Unwind_Context* context);
+__aeabi_unwind_cpp_pr0(_Unwind_State state, _Unwind_Control_Block* ucbp, _Unwind_Context* context) noexcept;
 _Unwind_Reason_Code
-__aeabi_unwind_cpp_pr1(_Unwind_State state, _Unwind_Control_Block* ucbp, _Unwind_Context* context);
+__aeabi_unwind_cpp_pr1(_Unwind_State state, _Unwind_Control_Block* ucbp, _Unwind_Context* context) noexcept;
 _Unwind_Reason_Code
-__aeabi_unwind_cpp_pr2(_Unwind_State state, _Unwind_Control_Block* ucbp, _Unwind_Context* context);
+__aeabi_unwind_cpp_pr2(_Unwind_State state, _Unwind_Control_Block* ucbp, _Unwind_Context* context) noexcept;
 }
 
 #endif

@@ -36,7 +36,7 @@ template<class T> struct default_delete<T[]> {
 
 namespace __detail {}  // namespace __detail
 
-template<class T_, class Del = default_delete<T_>> class unique_ptr {
+template<class T_, class Del = default_delete<T_>> class [[clang::trivial_abi]] unique_ptr {
     static constexpr bool array_form = is_unbounded_array_v<T_>;
     using T                          = remove_extent_t<T_>;
 

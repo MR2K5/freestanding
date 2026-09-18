@@ -133,7 +133,7 @@ static std::pair<PersonalityRoutine, uint32_t const*> resolve_entry(uint32_t con
     // 5. Generic Model in .ARM.extab
     // Word 0 is a PREL31 reference to the custom personality routine (e.g. __gxx_personality_v0)
     auto pr = reinterpret_cast<PersonalityRoutine>(prel31(extab));
-    return {pr, extab};
+    return {pr, extab + 1};
 }
 
 // Basically phase 2
@@ -160,6 +160,7 @@ static std::pair<PersonalityRoutine, uint32_t const*> resolve_entry(uint32_t con
         } else {
             // We have a cached pr coming from Resume
             // pr_cache is already set
+            
             pr = reinterpret_cast<PersonalityRoutine>(
                 std::exchange(ucpb->unwinder_cache.reserved1, 0)
             );

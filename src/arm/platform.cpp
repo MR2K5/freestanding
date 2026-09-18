@@ -1,4 +1,5 @@
 #include <atomic>
+#include <cstdint>
 #include <cstdlib>
 #include <cxxabi.h>
 
@@ -29,7 +30,14 @@ extern "C" void __cxa_guard_abort(int* guard) noexcept {
     if (old & 2) g.notify_all();
 }
 
-void _Exit(int) {
+void _Exit(int r) {
+    uint32_t params[2] = {
+        0x20026,                         // ADP_Stopped_ApplicationExit
+        static_cast<uint32_t>(r) // Return code for host shell ($?)
+    };
+    register uint32_t r0 asm("r0") = 0x20;
+    register uint32_t* r1 asm("r1") = params;
+    asm volatile ("bkpt 0xAB" : : "r"(r0), "r"(r1));
     while (1);
 }
 

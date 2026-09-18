@@ -3,6 +3,7 @@
 #include <__memory/base.hpp>
 #include <cstddef>
 #include <limits>
+#include <new>
 #include <utility>
 
 namespace std {
@@ -244,5 +245,50 @@ concept __simple_allocator = requires(Alloc alloc, size_t n) {
     { *alloc.allocate(n) } -> same_as<typename Alloc::value_type&>;
     { alloc.deallocate(alloc.allocate(n), n) };
 } && copy_constructible<Alloc> && equality_comparable<Alloc>;
+
+#ifdef _STD_HAS_HEAP
+
+template<class T> class allocator {
+public:
+    using value_type                             = T;
+    using size_type                              = size_t;
+    using difference_type                        = ptrdiff_t;
+    using propagate_on_container_move_assignment = true_type;
+
+    constexpr allocator() noexcept                 = default;
+    constexpr allocator(allocator const&) noexcept = default;
+    template<class U> constexpr allocator(allocator<U> const&) noexcept {}
+    constexpr ~allocator()                           = default;
+    constexpr allocator& operator=(allocator const&) = default;
+
+    constexpr T* allocate(size_t n) {
+        if (numeric_limits<size_t>::max() / sizeof(T) < n) _THROW(std::bad_alloc());
+        if constexpr (alignof(T) <= alignof(std::max_align_t))
+            return __builtin_operator_new(n);
+        else
+            return __builtin_operator_new(n, std::align_val_t(alignof(T)));
+    }
+    constexpr allocation_result<T*> allocate_at_least(size_t n) { return allocate(n); }
+    constexpr void deallocate(T* p, size_t n) {
+        if constexpr (alignof(T) <= alignof(std::max_align_t))
+            __builtin_operator_delete(p, n);
+        else
+            __builtin_operator_delete(p, n, std::align_val_t(alignof(T)));
+    }
+};
+
+template<class T, class U>
+constexpr bool operator==(allocator<T> const&, allocator<U> const&) noexcept {
+    return true;
+};
+
+#else
+
+template<class T> class allocator {
+public:
+    static_assert(false, "Allocator is not enabled when the heap is not in use");
+};
+
+#endif
 
 }  // namespace std

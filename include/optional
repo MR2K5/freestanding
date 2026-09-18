@@ -253,8 +253,8 @@ public:
     constexpr T* operator->() noexcept { return std::addressof(val); }
     constexpr T const& operator*() const& noexcept { return val; }
     constexpr T& operator*() & noexcept { return val; }
-    constexpr T const&& operator*() const&& noexcept { return val; }
-    constexpr T&& operator*() && noexcept { return val; }
+    constexpr T const&& operator*() const&& noexcept { return std::move(val); }
+    constexpr T&& operator*() && noexcept { return std::move(val); }
 
     constexpr explicit operator bool() const noexcept { return is_active; }
     constexpr bool has_value() const noexcept { return is_active; }

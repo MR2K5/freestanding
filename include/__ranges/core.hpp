@@ -773,4 +773,10 @@ namespace views {
 template<class T> inline constexpr empty_view<T> empty;
 }
 
+template<class T> constexpr T __div_ceil(T x, T y) noexcept {
+    T result = x / y;
+    if (x % y > 0) { ++result; }
+    return result;
+}
+
 }  // namespace std::ranges

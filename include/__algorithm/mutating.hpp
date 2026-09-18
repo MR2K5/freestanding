@@ -145,7 +145,7 @@ inline constexpr struct __swap_ranges_fn {
     template<input_iterator I1, sentinel_for<I1> S1, input_iterator I2, sentinel_for<I2> S2>
     requires indirectly_swappable<I1, I2> static constexpr swap_ranges_result<I1, I2>
     operator()(I1 first1, S1 last1, I2 first2, S2 last2) {
-        for (; !(first1 == last1 or first2 == last2); ++first1, ++first2) iter_swap(first1, first2);
+        for (; !(first1 == last1 || first2 == last2); ++first1, ++first2) iter_swap(first1, first2);
         return {std::move(first1), std::move(first2)};
     }
 

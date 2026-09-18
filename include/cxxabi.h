@@ -38,18 +38,17 @@ void __cxa_finalize(void* dso) noexcept;
 void* __dynamic_cast(
     void const* sub, __class_type_info const* src, __class_type_info const* dst,
     std::ptrdiff_t src2dst_offset
-);
+) noexcept;
 
 #if defined(__arm__)
 
 void* __cxa_allocate_exception(size_t sz);
-[[gnu::nothrow]] void __cxa_free_exception(void* p);
+void __cxa_free_exception(void* p) noexcept;
 [[noreturn]] void __cxa_throw(void*, std::type_info const*, void (*dtor)(void*));
 [[noreturn]] void __cxa_rethrow();
-void* __cxa_begin_catch(_Unwind_Control_Block* ucpb);
-void* __cxa_get_exception_pointer(_Unwind_Control_Block* ucpb);
-void __cxa_end_catch();
-void __cxa_end_cleanup();
+void* __cxa_begin_catch(_Unwind_Control_Block* ucpb) noexcept;
+void* __cxa_get_exception_pointer(_Unwind_Control_Block* ucpb) noexcept;
+void __cxa_end_catch() noexcept;
 
 // Internal
 
@@ -59,13 +58,13 @@ enum __cxa_type_match_result {
     ctm_succeeded_with_ptr_to_base = 2
 };
 
-bool __cxa_begin_cleanup(_Unwind_Control_Block* ucbp);
 __cxa_type_match_result __cxa_type_match(
     _Unwind_Control_Block* ucbp, std::type_info const* rttip, bool is_reference_type,
     void** matched_object
 ) noexcept;
+
 [[noreturn]] void __cxa_call_terminate(_Unwind_Control_Block* ucbp) noexcept;
-void* __get_std_except_ptr(_Unwind_Control_Block* ucpb) noexcept;
+
 
 struct __cxa_exception {
     _Unwind_Control_Block ucb;
@@ -75,9 +74,6 @@ struct __cxa_exception {
     __cxa_exception* nextCaughtException;       // Chain of "currently caught" c++ exception objects
     uint32_t handlerCount;                      // Count of how many handlers this EO is "caught" in
     uint32_t refcount;
-    // MOved to _Unwind_COntrol_Block.unwinder_cache.private4,5
-    // __cxa_exception* nextPropagatingException;  // Chain of objects saved over cleanup
-    // uint32_t propagationCount;                  // Count of live propagations(throws) of this EO
     alignas (std::max_align_t) std::byte exception[];
 };
 
@@ -86,7 +82,6 @@ struct __cxa_exception {
 struct __cxa_eh_globals {
     uint32_t uncaught_exceptions;
     __cxa_exception* caught_exceptions;
-    _Unwind_Control_Block* propagating_exceptions; // use unwinder_cache.private5 for the next pointer
 };
 
 constinit thread_local static __cxa_eh_globals __cxa_globals {};

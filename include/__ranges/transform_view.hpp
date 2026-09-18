@@ -39,7 +39,7 @@ class transform_view: public view_interface<transform_view<V, F>> {
 
         friend class transform_view;
         template<bool> friend class iterator;
-        template<bool> friend class sentinel;
+        // template<bool> friend class sentinel;
 
         constexpr iterator(Parent& parent, iterator_t<Base> current)
             : cur_(std::move(current)), parent_(std::addressof(parent)) {}

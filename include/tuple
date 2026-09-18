@@ -62,6 +62,9 @@ struct __tuple<index_sequence<Is...>, Ts...>: __tuple_leaf<Is, Ts>... {
 
     constexpr __tuple(__tuple const&) requires(is_copy_constructible_v<Ts> && ...) = default;
     constexpr __tuple(__tuple&&) requires(is_move_constructible_v<Ts> && ...)      = default;
+    constexpr __tuple& operator=(__tuple const&) requires(is_copy_assignable_v<Ts> && ...)
+    = default;
+    constexpr __tuple& operator=(__tuple&&) requires(is_move_assignable_v<Ts> && ...) = default;
 
     template<class... Us> struct __first {
         using type = void;
@@ -270,10 +273,6 @@ template<class... Ts> struct tuple: __tuple<index_sequence_for<Ts...>, Ts...> {
     using Base::Base;
     using Base::operator=;
     using Base::swap;
-
-    constexpr tuple& operator=(tuple const&) requires(is_copy_assignable_v<Ts> && ...) = default;
-    constexpr tuple& operator=(tuple&&) noexcept((is_nothrow_move_assignable_v<Ts> && ...))
-        requires(is_move_assignable_v<Ts> && ...) = default;
 };
 
 template<class... Us> tuple(Us...) -> tuple<Us...>;
@@ -352,13 +351,46 @@ template<class F, class Tp, size_t... Is> consteval bool __tuple_apply_nt(index_
     return is_nothrow_invocable_v<F, decltype(get<Is>(declval<Tp>()))...>;
 }
 
-template<class F, __tuple_like Tuple>
-constexpr decltype(auto) apply(F&& f, Tuple&& t) noexcept(
-    __tuple_apply_nt<F, Tuple>(make_index_sequence<tuple_size_v<remove_cvref_t<Tuple>>>{})
-) requires is_invocable_v<F, class As> {
-    auto&& [... ts] = FWD(t);
-    return std::invoke(FWD(f), FWD(ts)...);
+template<size_t I, class Tp>
+using __element_at = decltype(std::get<I>(declval<Tp>()));
+
+template<class F, class Tp, size_t... Is>
+constexpr auto __apply_impl(F&& f, Tp&& tp, index_sequence<Is...>) noexcept(
+    is_nothrow_invocable_v<F, __element_at<Is, Tp>...>
+) -> invoke_result_t<F, __element_at<Is, Tp>...> {
+    return std::invoke(FWD(f), std::get<Is>(FWD(tp))...);
 }
+
+template<class F, class Tp>
+using apply_result_t = decltype(__apply_impl(
+    declval<F>(), declval<Tp>(), make_index_sequence<tuple_size_v<remove_cvref_t<Tp>>>()
+));
+
+template<class F, class Tp>
+constexpr apply_result_t<F, Tp> apply(F&& f, Tp&& tp) noexcept(
+    noexcept(__apply_impl(FWD(f), FWD(tp), make_index_sequence<tuple_size_v<remove_cvref_t<Tp>>>()))
+) requires requires {
+    __apply_impl(FWD(f), FWD(tp), make_index_sequence<tuple_size_v<remove_cvref_t<Tp>>>());
+} {
+    return __apply_impl(FWD(f), FWD(tp), make_index_sequence<tuple_size_v<remove_cvref_t<Tp>>>());
+}
+
+template<class F, class Tp> struct apply_result {};
+template<class F, class Tp> requires requires { typename apply_result_t<F, Tp>; }
+struct apply_result<F, Tp> {
+    using type = apply_result_t<F, Tp>;
+};
+
+template<class F, class Tp> inline constexpr bool is_applicable_v = requires (F&& f, Tp&& tp) {
+    std::apply(FWD(f), FWD(tp));
+};
+
+template<class F, class Tp> inline constexpr bool is_nothrow_applicable_v = requires (F&& f, Tp&& tp) {
+    {std::apply(FWD(f), FWD(tp))} noexcept;
+};
+
+template<class F, class Tp> struct is_applicable: bool_constant<is_applicable_v<F, Tp>> {};
+template<class F, class Tp> struct is_nothrow_applicable: bool_constant<is_nothrow_applicable_v<F, Tp>> {};
 
 template<class T, __tuple_like Tpl> constexpr T make_from_tuple(Tpl&& tpl) {
     static_assert(

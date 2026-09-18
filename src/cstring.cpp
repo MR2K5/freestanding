@@ -1,7 +1,7 @@
 #include <cstddef>
 // #include <cstring> // Not included
 
-#include <__algorithm/copy_move_fill_find.hpp>
+#include <algorithm>
 #include <string.h>
 
 namespace std {
