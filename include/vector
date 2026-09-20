@@ -4,6 +4,7 @@
 #include <__algorithm/mutating.hpp>
 #include <__memory/algorithms.hpp>
 #include <__memory/base.hpp>
+#include <__memory/temp_value.hpp>
 #include <__ranges/as_rvalue.hpp>
 #include <__ranges/core.hpp>
 #include <__ranges/repeat.hpp>
@@ -11,10 +12,9 @@
 #include <__ranges/take_view.hpp>
 #include <__ranges/transform_view.hpp>
 #include <cassert>
+#include <compare>
 #include <concepts>
 #include <experimental/scope>
-#include <functional>
-#include <iterator>
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
@@ -130,6 +130,7 @@ public:
     }
 
     constexpr vector& operator=(vector&& x) noexcept(pocma || alloc_eq) {
+        if (this == &x) return *this;
         bool needs_to_realloc = !pocma && !alloc_eq && alloc_ != x.alloc_;
 
         if (needs_to_realloc) {
@@ -158,37 +159,44 @@ public:
     template<ranges::__detail::container_compatible_range<T> R>
     constexpr void assign_range(R&& rg) {
         static_assert(assignable_from<T&, ranges::range_reference_t<R>>);
+
         size_type est = 0;
         if constexpr (ranges::approximately_sized_range<R>)
             est = ranges::reserve_hint(rg);
         else if constexpr (ranges::forward_range<R>)
             est = ranges::distance(rg);
 
+        // Note: assign does not provide strong exception guarantees (ever)
+
         if (est > cap_) {
-            vector tmp(from_range, FWD(rg), alloc_);
-            __swap(tmp);
+            __clear_dealloc();
+            reserve(est);
+        }
+
+        auto beg = ranges::begin(rg);
+        auto e   = ranges::end(rg);
+
+        size_type cur_idx = 0;
+        for (; beg != e && cur_idx != size_; ++beg, ++cur_idx) (*this)[cur_idx] = *beg;
+
+        // Reached end of input range
+        if (cur_idx <= size_ && beg == e) {
+            ranges::destroy(begin() + cur_idx, end(), alloc_);
+            size_ = cur_idx;
             return;
         }
 
-        // We can copy-assign at most n elements
-        auto [in, out] = ranges::copy(rg | views::take(size_), begin());
+        assert(cur_idx == size_ && beg != e);
+        auto [i, o] = ranges::uninitialized_copy(std::move(beg), e, end(), __end_cap(), alloc_);
+        size_       = o - begin();
 
-        if (out < end()) {
-            ranges::destroy(out, end(), alloc_);
-            size_ = out - begin();
-        } else {
-            // We can copy-construct until cap_
-            auto [in2, out2] =
-                ranges::uninitialized_copy(in.base(), ranges::end(rg), out, __end_cap(), alloc_);
-            size_ = out2 - begin();
-
-            // If input is not exhausted, just push_back
-            for (; in2 != ranges::end(rg); ++in2) push_back(*in2);
-        }
+        for (; i != e; ++i) emplace_back(*i);
     }
 
     constexpr void assign(size_type n, T const& u) {
-        assign_range(u | views::repeat(n) | views::transform(&reference_wrapper<T const>::get));
+        assign_range(
+            views::repeat(std::cref(u), n) | views::transform(&reference_wrapper<T const>::get)
+        );
     }
     constexpr void assign(initializer_list<T> il) { assign_range(il); }
     constexpr allocator_type get_allocator() const noexcept { return alloc_; }
@@ -315,7 +323,7 @@ public:
         if (cap_ > max_cap - (cap_ >> 1)) { return max_cap; }
 
         // 1.5x integer growth: cap + (cap / 2)
-        // Seed with 1 when empty
+        // Seed with 4 when empty
         size_type const geometric = (cap_ < 4) ? cap_ + 4 : cap_ + (cap_ >> 1);
 
         // Pick whichever is larger: the geometric step or the exact target
@@ -350,53 +358,76 @@ public:
 
     template<ranges::__detail::container_compatible_range<T> R>
     constexpr void append_range(R&& rg) {
+        constexpr bool is_exact =
+            ranges::sized_range<R>
+            || (!ranges::approximately_sized_range<R> && ranges::forward_range<R>);
+
         size_type est = 0;
         if constexpr (ranges::approximately_sized_range<R>)
             est = ranges::reserve_hint(rg);
         else if constexpr (ranges::forward_range<R>)
             est = ranges::distance(rg);
 
-        constexpr bool size_known =
-            ranges::sized_range<R>
-            || (!ranges::approximately_sized_range<R> && ranges::forward_range<R>);
+        // 1. If we know the exact size and need to grow, do 1 allocation up front.
+        // Safe for self-aliased ranges.
+        if constexpr (is_exact) {
+            if (est == 0) return;
 
-        if constexpr (size_known) {
-            if (cap_ < size_ + est) {
+            if (size_ + est > cap_) {
                 vector tmp(alloc_);
                 tmp.reserve(__calculate_growth(size_ + est));
 
-                ranges::uninitialized_copy(
+                auto [in, out] = ranges::uninitialized_copy(
                     ranges::begin(rg), ranges::end(rg), tmp.begin() + size_, unreachable_sentinel,
                     alloc_
                 );
-                auto _ = experimental::scope_fail([&] {
-                    ranges::destroy_n(tmp.begin() + size_, est, alloc_);
+                size_type const copied = out - (tmp.begin() + size_);
+
+                auto _ = experimental::scope_fail([&] noexcept {
+                    ranges::destroy_n(tmp.begin() + size_, copied, alloc_);
                 });
+
                 uninit_move_if_noexcept(begin(), end(), tmp.begin(), tmp.begin() + size_, alloc_);
-                tmp.size_ = size_ + est;
+                tmp.size_ = size_ + copied;
 
                 __swap(tmp);
                 return;
             }
         }
 
-        // Try appending at end (succeeds if size_known)
+        // 2. In-place fast path: stream directly into spare capacity.
+        // Zero allocations for both exact and approximate ranges if they fit!
         auto [in, out] = ranges::uninitialized_copy(
             ranges::begin(rg), ranges::end(rg), end(), __end_cap(), alloc_
         );
-        auto added = out - end();
-        size_      = out - begin();
-        if (in == ranges::end(rg)) return;
+        size_type const added = out - end();
 
-        auto _ = experimental::scope_fail([&] {
-            for (; added != 0; --added) pop_back();
+        // If we reach the end, update size_ otherwise we must wait
+        if (in == ranges::end(rg)) {
+            size_ += added;
+            return;
+        }
+
+        bool needs_to_sub_size = false;
+        experimental::scope_fail _([&, out, e = end()] noexcept {
+            ranges::destroy(e, out, alloc_);
+            if (needs_to_sub_size) size_ -= added;
         });
 
-        // We don't know the actual size. allocate rest to a new vector and append that
+        // now alloc rest to temporary
         vector tmp(alloc_);
-        tmp.reserve(added > est ? 0 : est - added);
+        tmp.reserve(added < est ? 0 : est - added);
         for (; in != ranges::end(rg); ++in) tmp.emplace_back(*in);
-        append_range(tmp | views::as_rvalue);
+
+        // Update size_ as we no longer care of aliasing
+        // In case the next append fails we need to destroy the fast-path elements in this, but now
+        // we must also update the size back
+        size_             += added;
+        needs_to_sub_size  = true;
+
+        append_range(
+            tmp | views::as_rvalue
+        );  // This is guaranteed to hit the fast path in is_exact check
     }
 
     constexpr void pop_back() {
@@ -411,23 +442,16 @@ public:
             return end() - 1;
         }
 
-        T tmp(FWD(args)...);
-        return insert(position, std::move(tmp));
+        __detail::__temp_value<T, A> tmp(alloc_, FWD(args)...);
+        return insert_range(position, std::addressof(tmp.get(), std::addressof(tmp.get()) + 1));
     }
-    constexpr iterator insert(const_iterator position, T const& x) {
-        return insert_range(position, ranges::subrange(std::addressof(x), std::addressof(x) + 1));
-    }
+    constexpr iterator insert(const_iterator position, T const& x) { return emplace(position, x); }
     constexpr iterator insert(const_iterator position, T&& x) {
-        auto p = std::addressof(x);
-        return insert_range(
-            position, ranges::subrange(make_move_iterator(p), make_move_iterator(p + 1))
-        );
+        return emplace(position, std::move(x));
     }
     constexpr iterator insert(const_iterator position, size_type n, T const& x) {
-        return insert_range(
-            position,
-            views::repeat(std::cref(x), n) | views::transform(&reference_wrapper<T const>::get)
-        );
+        // Create a copy to handle aliasing problems
+        return insert_range(position, views::repeat(x, n));
     }
     template<class InputIterator>
     constexpr iterator insert(const_iterator position, InputIterator first, InputIterator last) {
@@ -435,15 +459,98 @@ public:
     }
 
     template<ranges::__detail::container_compatible_range<T> R>
-    constexpr iterator insert_range(const_iterator position, R&& rg) {}
+    constexpr iterator insert_range(const_iterator position, R&& rg) {
+        size_type idx = position - cbegin();
+        size_type est = 0;
+        if constexpr (ranges::approximately_sized_range<R>)
+            est = ranges::reserve_hint(rg);
+        else if constexpr (ranges::forward_range<R>)
+            est = ranges::distance(rg);
+
+        constexpr bool size_known =
+            ranges::sized_range<R>
+            || (!ranges::approximately_sized_range<R> && ranges::forward_range<R>);
+        if constexpr (size_known) {
+            if (size_ + est > cap_) {
+                vector tmp(alloc_);
+                tmp.reserve(__calculate_growth(size_ + est));
+
+                ranges::uninitialized_copy(
+                    ranges::begin(rg), ranges::end(rg), tmp.begin() + idx, tmp.begin() + idx + est,
+                    alloc_
+                );
+
+                experimental::scope_fail g1([&] {
+                    ranges::destroy(tmp.begin() + idx, tmp.begin() + idx + est);
+                });
+
+                uninit_move_if_noexcept(
+                    begin(), begin() + idx, tmp.begin(), tmp.begin() + idx, alloc_
+                );
+                tmp.size_ = idx + est;
+                g1.release();
+
+                uninit_move_if_noexcept(
+                    begin() + idx, end(), tmp.end(), tmp.begin() + size_ + est, alloc_
+                );
+                tmp.size_ = size_ + est;
+                __swap(tmp);
+            } else {
+                // Carve space in the middle
+                size_type tail_len = size_ - idx;
+                if (est >= tail_len) {
+                    // More elements to insert than in tail. First move tail and desrtoy it
+                    ranges::uninitialized_move(
+                        begin() + idx, end(), begin() + idx + est, __end_cap(), alloc_
+                    );
+                    experimental::scope_fail _([&] {
+                        ranges::destroy_n(begin() + idx + est, tail_len, alloc_);
+                    });
+
+                    ranges::destroy(begin() + idx, end(), alloc_);
+                    size_ -= tail_len;
+
+                    ranges::uninitialized_copy(
+                        ranges::begin(rg), ranges::end(rg), begin() + idx, begin() + idx + est,
+                        alloc_
+                    );
+                    size_ += tail_len + est;
+                } else {
+                    // Less elements in tail
+                    auto old_end = end();
+                    ranges::uninitialized_move(end() - est, end(), end(), end() + est, alloc_);
+                    size_ += est;
+
+                    ranges::move_backward(begin() + idx, old_end - est, old_end);
+                    ranges::destroy_n(begin() + idx, est, alloc_);
+                    size_ = idx;
+
+                    experimental::scope_fail _([&] {
+                        ranges::destroy_n(begin() + idx + est, tail_len, alloc_);
+                    });
+
+                    ranges::uninitialized_copy(
+                        ranges::begin(rg), ranges::end(rg), begin() + idx, begin() + idx + est,
+                        alloc_
+                    );
+                    size_ += tail_len + est;
+                }
+            }
+        } else {
+            // Just fall back to a rotate. There is no good way to avoid it
+            auto old_sz = size_;
+            append_range(FWD(rg));
+            ranges::rotate(begin() + idx, begin() + old_sz, end());
+        }
+
+        return begin() + idx;
+    }
 
     constexpr iterator insert(const_iterator position, initializer_list<T> il) {
         return insert_range(position, il);
     }
 
-    constexpr iterator erase(const_iterator position) {
-        erase(position, position + 1);
-    }
+    constexpr iterator erase(const_iterator position) { return erase(position, position + 1); }
     constexpr iterator erase(const_iterator first, const_iterator last) {
         assert(first >= cbegin() && first <= last && last <= cend());
         difference_type const idx   = first - cbegin();
@@ -525,6 +632,31 @@ template<class T, class Allocator>
 constexpr void
 swap(vector<T, Allocator>& x, vector<T, Allocator>& y) noexcept(noexcept(x.swap(y))) {
     x.swap(y);
+}
+
+template<class T, class Allocator, class U = T>
+constexpr vector<T, Allocator>::size_type erase(vector<T, Allocator>& c, U const& value) {
+    auto r = ranges::remove(c.begin(), c.end(), value);
+    c.erase(r.begin(), r.end());
+    return r.size();
+}
+
+template<class T, class Allocator, class Pred>
+constexpr vector<T, Allocator>::size_type erase_if(vector<T, Allocator>& c, Pred pred) {
+    auto r = ranges::remove_if(c.begin(), c.end(), std::move(pred));
+    c.erase(r.begin(), r.end());
+    return r.size();
+}
+
+template<class T, class A> constexpr bool operator==(vector<T, A> const& x, vector<T, A> const& y) {
+    return ranges::equal(x, y);
+}
+
+template<class T, class A>
+constexpr __synth_three_way_result<T> operator==(vector<T, A> const& x, vector<T, A> const& y) {
+    return lexicographical_compare_three_way(
+        x.begin(), x.end(), y.begin(), y.end(), __synth_three_way
+    );
 }
 
 }  // namespace std

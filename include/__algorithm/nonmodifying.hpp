@@ -454,28 +454,43 @@ inline constexpr struct __starts_with_fn {
 inline constexpr struct __equal_fn {
     template<
         input_iterator I1, sentinel_for<I1> S1, input_iterator I2, sentinel_for<I2> S2,
-        class Pred = equal_to, class Proj1 = identity, class Proj2 = identity>
+        class Pred = ranges::equal_to, class Proj1 = identity, class Proj2 = identity>
     requires indirectly_comparable<I1, I2, Pred, Proj1, Proj2> static constexpr bool operator()(
         I1 first1, S1 last1, I2 first2, S2 last2, Pred pred = {}, Proj1 proj1 = {}, Proj2 proj2 = {}
     ) {
-        if constexpr (sized_sentinel_for<S1, I1> and sized_sentinel_for<S2, I2>)
-            if (ranges::distance(first1, last1) != ranges::distance(first2, last2)) return false;
+        // Fast path: both sentinels are sized
+        if constexpr (sized_sentinel_for<S1, I1> && sized_sentinel_for<S2, I2>) {
+            if ((last1 - first1) != (last2 - first2)) return false;
 
-        for (; first1 != last1; ++first1, (void)++first2)
-            if (!std::invoke(pred, std::invoke(proj1, *first1), std::invoke(proj2, *first2)))
-                return false;
-        return true;
+            for (; first1 != last1; ++first1, (void)++first2) {
+                if (!std::invoke(pred, std::invoke(proj1, *first1), std::invoke(proj2, *first2)))
+                    return false;
+            }
+            return true;
+        } else {
+            // General path: must guard both iterators
+            for (; first1 != last1 && first2 != last2; ++first1, (void)++first2) {
+                if (!std::invoke(pred, std::invoke(proj1, *first1), std::invoke(proj2, *first2)))
+                    return false;
+            }
+            return first1 == last1 && first2 == last2;
+        }
     }
 
     template<
-        input_range R1, input_range R2, class Pred = equal_to, class Proj1 = identity,
+        input_range R1, input_range R2, class Pred = ranges::equal_to, class Proj1 = identity,
         class Proj2 = identity>
     requires indirectly_comparable<iterator_t<R1>, iterator_t<R2>, Pred, Proj1, Proj2>
     static constexpr bool
     operator()(R1&& r1, R2&& r2, Pred pred = {}, Proj1 proj1 = {}, Proj2 proj2 = {}) {
-        return operator()(
-            begin(r1), end(r1), begin(r2), end(r2), std::move(pred), std::move(proj1),
-            std::move(proj2)
+        // Sized-range optimization before iterator decay
+        if constexpr (sized_range<R1> && sized_range<R2>) {
+            if (ranges::distance(r1) != ranges::distance(r2)) return false;
+        }
+
+        return __equal_fn::operator()(
+            ranges::begin(r1), ranges::end(r1), ranges::begin(r2), ranges::end(r2), std::move(pred),
+            std::move(proj1), std::move(proj2)
         );
     }
 } equal;
