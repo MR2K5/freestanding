@@ -1,7 +1,8 @@
 #pragma once
 
-#include "compare"
-#include "concepts"
+#include <__memory/base.hpp>
+#include <compare>
+#include <concepts>
 #include <cstddef>
 #include <type_traits>
 #include <utility>
@@ -10,12 +11,42 @@ namespace std {
 
 template<class... Ts> inline constexpr bool __enable_tuple_like<tuple<Ts...>> = true;
 
+struct __tuple_using_alloc {};
+
 template<size_t I, class T> struct __tuple_leaf {
     T obj_;
     static constexpr size_t idx = I;
     using type                  = T;
 
-    template<class... As> constexpr __tuple_leaf(As&&... as): obj_(FWD(as)...) {}
+    template<class U>
+    requires(!is_same_v<remove_cvref_t<U>, __tuple_leaf>) && is_constructible_v<T, U>
+    constexpr __tuple_leaf(U&& u) noexcept(is_nothrow_constructible_v<T, U>): obj_(FWD(u)) {}
+
+    __tuple_leaf() requires is_default_constructible_v<T> = default;
+
+    __tuple_leaf(__tuple_leaf const&) = default;
+    __tuple_leaf(__tuple_leaf&&)      = default;
+
+    template<class Alloc, class... As> requires(!uses_allocator_v<T, Alloc> || is_reference_v<T>)
+                                            && is_constructible_v<T, As...> constexpr __tuple_leaf(
+        __tuple_using_alloc, Alloc const&, As&&... as
+    ) noexcept(is_nothrow_constructible_v<T, As...>)
+        : obj_(FWD(as)...) {}
+
+    template<class Alloc, class... As>
+    requires uses_allocator_v<T, Alloc> && (!is_reference_v<T>)
+          && is_constructible_v<T, allocator_arg_t, Alloc const&, As...> constexpr __tuple_leaf(
+        __tuple_using_alloc, Alloc const& a, As&&... as
+    ) noexcept(is_nothrow_constructible_v<T, allocator_arg_t, Alloc const&, As...>)
+        : obj_(allocator_arg_t{}, a, FWD(as)...) {}
+
+    template<class Alloc, class... As>
+    requires uses_allocator_v<T, Alloc> && (!is_reference_v<T>)
+          && (!is_constructible_v<T, allocator_arg_t, Alloc const&, As...>)
+          && is_constructible_v<T, As..., Alloc const&> constexpr __tuple_leaf(
+        __tuple_using_alloc, Alloc const& a, As&&... as
+    ) noexcept(is_nothrow_constructible_v<T, As..., Alloc const&>)
+        : obj_(FWD(as)..., a) {}
 };
 
 template<class T>
@@ -23,6 +54,54 @@ concept __copy_list_initializable = requires {
     [](T const&) {
     }({});
 };
+
+template<class T, class A, class... As> consteval bool __is_uses_alloc_constructible() {
+    if constexpr (is_reference_v<T>)
+        return is_constructible_v<T, As...>;
+    else if constexpr (!uses_allocator_v<T, A>)
+        return is_constructible_v<T, As...>;
+    else
+        return is_constructible_v<T, allocator_arg_t, A const&, As...>
+            || is_constructible_v<T, As..., A const&>;
+}
+
+template<class T, class A, class... As> consteval bool __is_uses_alloc_implicit() {
+    if constexpr (is_reference_v<T>) {
+        static_assert(sizeof...(As) == 1);
+        return is_convertible_v<As..., T>;
+    } else if constexpr (!uses_allocator_v<T, A>)
+        return requires(As&&... as) {
+            [](T) {
+            }({FWD(as)...});
+        };
+    else
+        return requires(A const& a, As&&... as) {
+            [](T) {
+            }({allocator_arg_t{}, a, FWD(as)...});
+        } || requires(A const& a, As&&... as) {
+            [](T) {
+            }({FWD(as)..., a});
+        };
+}
+
+template<class T, class A, class... As>
+inline constexpr bool __is_uses_alloc_ctor_v = __is_uses_alloc_constructible<T, A, As...>();
+
+template<class T, class A, class... As>
+inline constexpr bool __is_uses_alloc_implicit_v = __is_uses_alloc_implicit<T, A, As...>();
+
+template<class T, class Alloc, class Arg> consteval bool __is_uses_alloc_convertible_impl() {
+    if constexpr (is_reference_v<T> || !uses_allocator_v<T, Alloc>) {
+        return is_convertible_v<Arg, T>;
+    } else {
+        // Types using allocators require direct initialization
+        return false;
+    }
+}
+
+template<class T, class Alloc, class Arg>
+inline constexpr bool __is_uses_alloc_convertible_v =
+    __is_uses_alloc_convertible_impl<T, Alloc, Arg>();
 
 template<class Is, class... Ts> struct __tuple;
 template<size_t... Is, class... Ts>
@@ -153,6 +232,146 @@ struct __tuple<index_sequence<Is...>, Ts...>: __tuple_leaf<Is, Ts>... {
     __tuple(Tp&& u)
         requires(reference_constructs_from_temporary_v<Ts, decltype(get<Is>(FWD(u)))> || ...)
         = delete;
+
+    // USES ALLOC
+
+    // 1. Default
+    template<class Alloc>
+    constexpr explicit((!__is_uses_alloc_implicit_v<Ts, Alloc> || ...)) __tuple(
+        allocator_arg_t, Alloc const& a
+    ) requires(__is_uses_alloc_ctor_v<Ts, Alloc> && ...)
+        : __tuple_leaf<Is, Ts>(__tuple_using_alloc{}, a)... {}
+
+    // 2. const Types&...
+    template<class Alloc>
+    constexpr explicit((!__is_uses_alloc_implicit_v<Ts, Alloc, Ts const&> || ...)) __tuple(
+        allocator_arg_t, Alloc const& a, Ts const&... ts
+    ) requires(sizeof...(Ts) >= 1) && (__is_uses_alloc_ctor_v<Ts, Alloc, Ts const&> && ...)
+        : __tuple_leaf<Is, Ts>(__tuple_using_alloc{}, a, ts)... {}
+
+    // 3. UTypes&&...
+    template<class Alloc, class... UTypes>
+    constexpr explicit((!__is_uses_alloc_implicit_v<Ts, Alloc, UTypes> || ...)) __tuple(
+        allocator_arg_t, Alloc const& a, UTypes&&... u
+    ) requires(sizeof...(Ts) == sizeof...(UTypes)) && (sizeof...(Ts) >= 1)
+           && (sizeof...(Ts) != 1 || !is_same_v<remove_cvref_t<UTypes...[0]>, tuple<Ts...>>)
+           && (__is_uses_alloc_ctor_v<Ts, Alloc, UTypes> && ...)
+        : __tuple_leaf<Is, Ts>(__tuple_using_alloc{}, a, FWD(u))... {}
+
+    template<class Alloc, class... UTypes>
+    __tuple(allocator_arg_t, Alloc const&, UTypes&&... u)
+        requires(sizeof...(Ts) == sizeof...(UTypes)) && (sizeof...(Ts) >= 1)
+                 && (sizeof...(Ts) != 1 || !is_same_v<remove_cvref_t<UTypes...[0]>, tuple<Ts...>>)
+                 && (__is_uses_alloc_ctor_v<Ts, Alloc, UTypes> && ...)
+                 && (reference_constructs_from_temporary_v<Ts, UTypes &&> || ...) = delete;
+
+    // 4 & 5. Allocator Copy & Move
+    template<class Alloc>
+    constexpr __tuple(allocator_arg_t, Alloc const& a, tuple<Ts...> const& u)
+        requires(__is_uses_alloc_ctor_v<Ts, Alloc, Ts const&> && ...)
+        : __tuple_leaf<Is, Ts>(__tuple_using_alloc{}, a, get<Is>(u))... {}
+
+    template<class Alloc>
+    constexpr __tuple(allocator_arg_t, Alloc const& a, tuple<Ts...>&& u)
+        requires(__is_uses_alloc_ctor_v<Ts, Alloc, Ts> && ...)
+        : __tuple_leaf<Is, Ts>(__tuple_using_alloc{}, a, get<Is>(FWD(u)))... {}
+
+    template<class Alloc>
+    constexpr __tuple(allocator_arg_t, Alloc const& a, __tuple const& u)
+        requires(__is_uses_alloc_ctor_v<Ts, Alloc, Ts const&> && ...)
+        : __tuple_leaf<Is, Ts>(__tuple_using_alloc{}, a, get<Is>(u))... {}
+
+    template<class Alloc>
+    constexpr __tuple(allocator_arg_t, Alloc const& a, __tuple&& u)
+        requires(__is_uses_alloc_ctor_v<Ts, Alloc, Ts> && ...)
+        : __tuple_leaf<Is, Ts>(__tuple_using_alloc{}, a, get<Is>(FWD(u)))... {}
+
+    // 6 - 9. Converting Tuples
+#define _DECL_ALLOC_CTOR(qual)                                                                     \
+    template<class Alloc, class... Us>                                                             \
+    explicit(                                                                                      \
+        (!__is_uses_alloc_implicit_v<Ts, Alloc, decltype(get<Is>(declval<tuple<Us...> qual>()))>   \
+         || ...)                                                                                   \
+    ) constexpr __tuple(allocator_arg_t, Alloc const& a, tuple<Us...> qual u)                      \
+        requires(sizeof...(Ts) == sizeof...(Us))                                                   \
+             && (__is_uses_alloc_ctor_v<Ts, Alloc, decltype(get<Is>(FWD(u)))> && ...)              \
+             && (sizeof...(Us) != 1                                                                \
+                 || (!is_convertible_v<decltype(u), Ts...[0]>                                      \
+                     && !is_constructible_v<__first_t<Ts...>, decltype(u)>                         \
+                     && !is_same_v<__first_t<Ts...>, __first_t<Us...>>))                           \
+        : __tuple_leaf<Is, Ts>(__tuple_using_alloc{}, a, get<Is>(FWD(u)))... {}                    \
+                                                                                                   \
+    template<class Alloc, class... Us>                                                             \
+    __tuple(allocator_arg_t, Alloc const&, tuple<Us...> qual u)                                    \
+        requires(sizeof...(Ts) == sizeof...(Us))                                                   \
+                 && (__is_uses_alloc_ctor_v<Ts, Alloc, decltype(get<Is>(FWD(u)))> && ...)          \
+                 && (sizeof...(Us) != 1                                                            \
+                     || (!is_convertible_v<decltype(u), __first_t<Ts...>>                          \
+                         && !is_constructible_v<__first_t<Ts...>, decltype(u)>                     \
+                         && !is_same_v<__first_t<Ts...>, __first_t<Us...>>))                       \
+                 && (reference_constructs_from_temporary_v<Ts, decltype(get<Is>(FWD(u)))> || ...)  \
+        = delete;
+
+    _DECL_ALLOC_CTOR(&)
+    _DECL_ALLOC_CTOR(&&)
+    _DECL_ALLOC_CTOR(const&)
+    _DECL_ALLOC_CTOR(const&&)
+#undef _DECL_ALLOC_CTOR
+
+    // 10 - 13. Converting Pairs
+#define _DECL_ALLOC_PAIR_CTOR(qual)                                                                \
+    template<class Alloc, class U1, class U2>                                                      \
+    constexpr explicit(                                                                            \
+        !__is_uses_alloc_implicit_v<                                                               \
+            __first_t<Ts...>, Alloc, decltype(get<0>(declval<pair<U1, U2> qual>()))>               \
+        || !__is_uses_alloc_implicit_v<                                                            \
+            __second_t<Ts...>, Alloc, decltype(get<1>(declval<pair<U1, U2> qual>()))>              \
+    ) __tuple(allocator_arg_t, Alloc const& a, pair<U1, U2> qual u)                                \
+        requires(sizeof...(Ts) == 2)                                                               \
+                 && __is_uses_alloc_ctor_v<__first_t<Ts...>, Alloc, decltype(get<0>(FWD(u)))>      \
+                 && __is_uses_alloc_ctor_v<__second_t<Ts...>, Alloc, decltype(get<1>(FWD(u)))>     \
+        : __tuple_leaf<0, __first_t<Ts...>>(__tuple_using_alloc{}, a, get<0>(FWD(u))),             \
+          __tuple_leaf<1, __second_t<Ts...>>(__tuple_using_alloc{}, a, get<1>(FWD(u))) {}          \
+                                                                                                   \
+    template<class Alloc, class U1, class U2>                                                      \
+    __tuple(allocator_arg_t, Alloc const&, pair<U1, U2> qual u)                                    \
+        requires(sizeof...(Ts) == 2)                                                               \
+                 && __is_uses_alloc_ctor_v<__first_t<Ts...>, Alloc, decltype(get<0>(FWD(u)))>      \
+                 && __is_uses_alloc_ctor_v<__second_t<Ts...>, Alloc, decltype(get<1>(FWD(u)))>     \
+                 && (reference_constructs_from_temporary_v<                                        \
+                         __first_t<Ts...>, decltype(get<0>(FWD(u)))>                               \
+                     || reference_constructs_from_temporary_v<                                     \
+                         __second_t<Ts...>, decltype(get<1>(FWD(u)))>) = delete;
+
+    _DECL_ALLOC_PAIR_CTOR(&)
+    _DECL_ALLOC_PAIR_CTOR(&&)
+    _DECL_ALLOC_PAIR_CTOR(const&)
+    _DECL_ALLOC_PAIR_CTOR(const&&)
+#undef _DECL_ALLOC_PAIR_CTOR
+
+    // 14. Tuple-Like
+    template<class Alloc, __tuple_like Tp>
+    constexpr explicit(
+        (!__is_uses_alloc_implicit_v<Ts, Alloc, decltype(get<Is>(declval<Tp>()))> || ...)
+    ) __tuple(allocator_arg_t, Alloc const& a, Tp&& u)
+        requires __different_from<Tp, tuple<Ts...>> && (!__is_subrange_v<remove_cvref_t<Tp>>)
+              && (sizeof...(Ts) == tuple_size_v<remove_cvref_t<Tp>>)
+              && (__is_uses_alloc_ctor_v<Ts, Alloc, decltype(get<Is>(FWD(u)))> && ...)
+              && (sizeof...(Ts) != 1
+                  || (!is_convertible_v<Tp, Ts...[0]> && !is_constructible_v<Ts...[0], Tp>))
+        : __tuple_leaf<Is, Ts>(__tuple_using_alloc{}, a, get<Is>(FWD(u)))... {}
+
+    template<class Alloc, __tuple_like Tp>
+    __tuple(allocator_arg_t, Alloc const&, Tp&& u)
+        requires __different_from<Tp, tuple<Ts...>> && (!__is_subrange_v<remove_cvref_t<Tp>>)
+                  && (sizeof...(Ts) == tuple_size_v<remove_cvref_t<Tp>>)
+                  && (__is_uses_alloc_ctor_v<Ts, Alloc, decltype(get<Is>(FWD(u)))> && ...)
+                  && (sizeof...(Ts) != 1
+                      || (!is_convertible_v<Tp, Ts...[0]> && !is_constructible_v<Ts...[0], Tp>))
+                  && (reference_constructs_from_temporary_v<Ts, decltype(get<Is>(FWD(u)))> || ...)
+        = delete;
+
+    // ASSIGN
 
     constexpr tuple<Ts...> const& operator=(tuple<Ts...> const& u) const
         requires(is_copy_assignable_v<Ts const> && ...) {
@@ -351,8 +570,7 @@ template<class F, class Tp, size_t... Is> consteval bool __tuple_apply_nt(index_
     return is_nothrow_invocable_v<F, decltype(get<Is>(declval<Tp>()))...>;
 }
 
-template<size_t I, class Tp>
-using __element_at = decltype(std::get<I>(declval<Tp>()));
+template<size_t I, class Tp> using __element_at = decltype(std::get<I>(declval<Tp>()));
 
 template<class F, class Tp, size_t... Is>
 constexpr auto __apply_impl(F&& f, Tp&& tp, index_sequence<Is...>) noexcept(
@@ -381,16 +599,17 @@ struct apply_result<F, Tp> {
     using type = apply_result_t<F, Tp>;
 };
 
-template<class F, class Tp> inline constexpr bool is_applicable_v = requires (F&& f, Tp&& tp) {
-    std::apply(FWD(f), FWD(tp));
-};
+template<class F, class Tp>
+inline constexpr bool is_applicable_v = requires(F&& f, Tp&& tp) { std::apply(FWD(f), FWD(tp)); };
 
-template<class F, class Tp> inline constexpr bool is_nothrow_applicable_v = requires (F&& f, Tp&& tp) {
-    {std::apply(FWD(f), FWD(tp))} noexcept;
+template<class F, class Tp>
+inline constexpr bool is_nothrow_applicable_v = requires(F&& f, Tp&& tp) {
+    { std::apply(FWD(f), FWD(tp)) } noexcept;
 };
 
 template<class F, class Tp> struct is_applicable: bool_constant<is_applicable_v<F, Tp>> {};
-template<class F, class Tp> struct is_nothrow_applicable: bool_constant<is_nothrow_applicable_v<F, Tp>> {};
+template<class F, class Tp>
+struct is_nothrow_applicable: bool_constant<is_nothrow_applicable_v<F, Tp>> {};
 
 template<class T, __tuple_like Tpl> constexpr T make_from_tuple(Tpl&& tpl) {
     static_assert(
@@ -524,5 +743,8 @@ template<class F, class Tuple> constexpr void __tuple_for_each(F&& f, Tuple&& tu
 }
 
 }  // namespace __detail
+
+template<class... Types, class Alloc>
+struct uses_allocator<std::tuple<Types...>, Alloc>: std::true_type {};
 
 }  // namespace std

@@ -1,0 +1,323 @@
+#pragma once
+
+#include <__memory/allocator.hpp>
+#include <__ranges/core.hpp>
+#include <concepts>
+#include <coroutine>
+#include <cstddef>
+#include <exception>
+#include <new>
+#include <type_traits>
+#include <utility>
+
+namespace std {
+
+template<class Ref, class Val = void, __simple_allocator Alloc = void>
+class generator: public ranges::view_interface<generator<Ref, Val, Alloc>> {
+private:
+    using value     = conditional_t<is_void_v<Val>, remove_cvref_t<Ref>, Val>;
+    using reference = conditional_t<is_void_v<Val>, Ref&&, Ref>;
+
+    static_assert(is_object_v<value> && !is_const_v<value> && !is_volatile_v<value>);
+    static_assert(
+        is_reference_v<reference>
+        || (copy_constructible<reference> && is_object_v<reference> && !is_const_v<reference>
+            && !is_volatile_v<reference>)
+    );
+
+    using RRef = conditional_t<is_reference_v<Ref>, remove_reference_t<reference>&&, reference>;
+    static_assert(
+        common_reference_with<reference&&, value&> && common_reference_with<reference&&, RRef&&>
+        && common_reference_with<RRef&&, value const&>
+    );
+    static_assert(is_void_v<Alloc> || requires {
+        requires is_pointer_v<typename allocator_traits<Alloc>::pointer>;
+    });
+
+    class iterator;
+
+public:
+    class promise_type;
+    using yielded = conditional_t<is_reference_v<reference>, reference, reference const&>;
+
+    generator(generator const&) = delete;
+    generator(generator&& o) noexcept: coro_(std::exchange(o.coro_, nullptr)) {}
+    ~generator() {
+        if (coro_) coro_.destroy();
+    }
+    generator& operator=(generator o) noexcept {
+        std::swap(coro_, o.coro_);
+        return *this;
+    }
+
+    iterator begin() {
+        if (coro_) coro_.resume();
+        return iterator(coro_);
+    }
+    default_sentinel_t end() const noexcept { return {}; }
+
+private:
+    explicit generator(coroutine_handle<promise_type> c) noexcept: coro_(c) {}
+
+    using handle_alloc = allocator_traits<Alloc>::template rebind_alloc<coroutine_handle<>>;
+
+    coroutine_handle<promise_type> coro_ = nullptr;
+};
+
+struct __promise_base {
+    __promise_base* parent_ = nullptr;
+    coroutine_handle<> self = nullptr;
+    union {
+        __promise_base* active_leaf_;
+        __promise_base** leaf_ptr_;
+    };
+};
+
+struct __gen_new_t {
+    alignas(__STDCPP_DEFAULT_NEW_ALIGNMENT__) char _[__STDCPP_DEFAULT_NEW_ALIGNMENT__];
+};
+
+template<class Ref, class Val, __simple_allocator Allocator>
+class [[clang::coro_return_type, clang::coro_await_elidable]] generator<
+    Ref, Val, Allocator>::promise_type: public __promise_base {
+public:
+    promise_type() noexcept {
+        self         = coroutine_handle<promise_type>::from_promise(*this);
+        active_leaf_ = this;
+    }
+
+    generator get_return_object() noexcept {
+        return generator(coroutine_handle<promise_type>::from_promise(*this));
+    }
+
+    suspend_always initial_suspend() const noexcept { return {}; }
+    auto final_suspend() noexcept {
+        struct final_suspend: suspend_always {
+            coroutine_handle<> await_suspend(coroutine_handle<promise_type> h) noexcept {
+                auto& pr = h.promise();
+                if (pr.parent_) {
+                    auto* parent  = pr.parent_;
+                    *pr.leaf_ptr_ = parent;  // Pop stack: restore parent as active leaf
+                    return parent->self;     // Tail-resume parent
+                }
+                return std::noop_coroutine();
+            }
+        };
+        return final_suspend();
+    }
+
+    suspend_always yield_value(yielded val) noexcept {
+        value_ = std::addressof(val);
+        return {};
+    }
+
+    auto yield_value(remove_reference_t<yielded> const& lval)
+        requires is_rvalue_reference_v<yielded>
+              && constructible_from<remove_cvref_t<yielded>, remove_reference_t<yielded> const&> {
+
+        struct await: suspend_always {
+            void await_suspend(coroutine_handle<promise_type> p) {
+                p.promise().value_ = std::addressof(store);
+            }
+
+            remove_cvref_t<yielded> store;
+        };
+
+        return await{{}, lval};
+    }
+
+    template<class R2, class V2, class Alloc2, class Unused>
+    requires same_as<typename generator<R2, V2, Alloc2>::yielded, yielded>
+    auto yield_value(ranges::elements_of<generator<R2, V2, Alloc2>&&, Unused> g) noexcept {
+        return yield_value(g);
+    }
+
+    template<class R2, class V2, class Alloc2, class Unused>
+    requires same_as<typename generator<R2, V2, Alloc2>::yielded, yielded>
+    auto yield_value(ranges::elements_of<generator<R2, V2, Alloc2>&, Unused> g) noexcept {
+        struct await {
+            generator<R2, V2, Alloc2> gen;
+
+            coroutine_handle<> await_suspend(coroutine_handle<promise_type> h) noexcept {
+                __promise_base& pr    = h.promise();
+                __promise_base& child = gen.coro_.promise();
+
+                child.parent_ = &pr;
+                if (pr.parent_) {
+                    child.leaf_ptr_ = pr.leaf_ptr_;
+                    *pr.leaf_ptr_   = &child;
+                } else {
+                    pr.active_leaf_ = &child;
+                    child.leaf_ptr_ = &pr.active_leaf_;
+                }
+                return gen.coro_;
+            }
+
+            void await_resume() {
+                if (gen.coro_.promise().ex_ptr_)
+                    std::rethrow_exception(gen.coro_.promise().ex_ptr_);
+            }
+            constexpr bool await_ready() const noexcept { return false; }
+        };
+
+        return await{std::move(g.range)};
+    }
+
+    template<ranges::input_range R, class Alloc>
+    requires convertible_to<ranges::range_reference_t<R>, yielded>
+    auto yield_value(ranges::elements_of<R, Alloc> r) {
+        auto nested = [](allocator_arg_t, Alloc, ranges::iterator_t<R> i,
+                         ranges::sentinel_t<R> s) -> generator<yielded, void, Alloc> {
+            for (; i != s; ++i) co_yield static_cast<yielded>(*i);
+        };
+        return yield_value(
+            ranges::elements_of{
+                nested(allocator_arg, r.allocator, ranges::begin(r.range), ranges::end(r.range))
+            }
+        );
+    }
+
+    void await_transform() = delete;
+
+    void return_void() const noexcept {}
+    void unhandled_exception() {
+        if (parent_)
+            ex_ptr_ = std::current_exception();
+        else
+            throw;
+    }
+
+    void* operator new(size_t size)
+        requires same_as<Allocator, void> || default_initializable<Allocator> {
+        return __do_new(__rebind_alloc(__get_allocator()), size);
+    }
+
+    template<class Alloc, class... Args>
+    void* operator new(size_t size, allocator_arg_t, Alloc const& alloc, Args const&...) {
+        return __do_new(__rebind_alloc(__get_allocator(alloc)), size);
+    }
+
+    template<class This, class Alloc, class... Args>
+    void*
+    operator new(size_t size, This const&, allocator_arg_t, Alloc const& alloc, Args const&...) {
+        return operator new(size, allocator_arg, alloc);
+    }
+
+    void operator delete(void* pointer, size_t size) noexcept {
+        auto p             = static_cast<__gen_new_t*>(pointer);
+        auto after_promise = p + ranges::__div_ceil(size, sizeof(__gen_new_t));
+
+        if constexpr (store_both) {
+            (*reinterpret_cast<void (**)(__gen_new_t*, size_t, void*)>(after_promise))(
+                p, size, after_promise
+            );
+        } else if constexpr (store_alloc) {
+            using B    = allocator_traits<Allocator>::template rebind_alloc<__gen_new_t>;
+            auto alloc = std::move(*std::launder(reinterpret_cast<B*>(after_promise)));
+            std::destroy_at(std::launder(reinterpret_cast<B*>(after_promise)));
+            allocator_traits<B>::deallocate(alloc, p, __calc_size(alloc, size));
+        } else {
+            using B = allocator_traits<Allocator>::template rebind_alloc<__gen_new_t>;
+            B alloc{};
+            allocator_traits<B>::deallocate(alloc, p, __calc_size(alloc, size));
+        }
+    }
+
+    static auto __get_allocator() {
+        if constexpr (is_void_v<Allocator>)
+            return allocator<void>();
+        else
+            return Allocator();
+    }
+    static auto&& __get_allocator(auto const& a) {
+        if constexpr (!is_void_v<Allocator>)
+            return Allocator(a);
+        else
+            return a;
+    }
+    template<class A> static auto __rebind_alloc(A const& a) {
+        using B = allocator_traits<A>::template rebind_alloc<__gen_new_t>;
+        return B(a);
+    }
+
+    static constexpr bool store_alloc =
+        !is_void_v<Allocator>
+        && !(
+            default_initializable<Allocator> && allocator_traits<Allocator>::is_always_equal::value
+        );
+    static constexpr bool store_both = is_void_v<Allocator>;
+
+    template<class B> struct __alloc_store {
+        void (*deleter)(__gen_new_t*, size_t, void*) noexcept;
+        [[no_unique_address]] B alloc;
+
+        __alloc_store(void (*d)(__gen_new_t*, size_t, void*) noexcept, B&& a) noexcept
+            : deleter(d), alloc(std::move(a)) {}
+    };
+
+    template<class B> static size_t __calc_size(B const&, size_t size) {
+        auto res = ranges::__div_ceil(size, sizeof(__gen_new_t));
+        if constexpr (store_both) {
+            res += ranges::__div_ceil(sizeof(__alloc_store<B>), sizeof(__gen_new_t));
+        } else if constexpr (store_alloc) {
+            res += ranges::__div_ceil(sizeof(B), sizeof(__gen_new_t));
+        }
+        return res;
+    }
+
+    template<class Actual> static void* __do_new(Actual alloc, size_t size) {
+        auto rq            = __calc_size(alloc, size);
+        auto storage       = allocator_traits<Actual>::allocate(alloc, rq);
+        auto after_promise = storage + ranges::__div_ceil(size, sizeof(__gen_new_t));
+
+        if constexpr (store_both) {
+            using TGT = __alloc_store<Actual>;
+            auto dtor = [](__gen_new_t* p, size_t size, void* tgt) noexcept {
+                TGT* p2    = static_cast<TGT*>(tgt);
+                auto alloc = std::move(p2->alloc);
+                std::destroy_at(p2);
+                allocator_traits<Actual>::deallocate(alloc, p, __calc_size(alloc, size));
+            };
+
+            std::construct_at(reinterpret_cast<TGT*>(after_promise), dtor, std::move(alloc));
+        } else if constexpr (store_alloc) {
+            std::construct_at(reinterpret_cast<Actual*>(after_promise), std::move(alloc));
+        }
+        return storage;
+    }
+
+private:
+    add_pointer_t<yielded> value_;
+    exception_ptr ex_ptr_;
+};
+
+template<class Ref, class Val, __simple_allocator Allocator>
+class generator<Ref, Val, Allocator>::iterator {
+public:
+    using value_type      = value;
+    using difference_type = ptrdiff_t;
+
+    iterator(iterator&& other) noexcept: coroutine_(std::exchange(other.coroutine_, nullptr)) {}
+    iterator& operator=(iterator&& other) noexcept {
+        coroutine_ = std::exchange(other.coroutine_, nullptr);
+        return *this;
+    }
+
+    reference operator*() const noexcept(is_nothrow_copy_constructible_v<reference>) {
+        return static_cast<reference>(*coroutine_.promise().active_leaf_->value_);
+    }
+    iterator& operator++() { coroutine_.promise().active_leaf_->self.resume(); }
+    void operator++(int) { ++*this; }
+
+    friend bool operator==(iterator const& i, default_sentinel_t) { return i.coroutine_ &&  i.coroutine_.done(); }
+
+private:
+    friend generator;
+    explicit iterator(coroutine_handle<promise_type> h) noexcept: coroutine_(h) {}
+    coroutine_handle<promise_type> coroutine_;  // exposition only
+};
+
+
+// TODO check this
+
+}  // namespace std

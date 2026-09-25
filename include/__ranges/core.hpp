@@ -7,6 +7,7 @@
 #include <__iterator/concepts.hpp>
 #include <__iterator/const_iterator.hpp>
 #include <__memory/base.hpp>
+#include <__memory/allocator.hpp>
 #include <cassert>
 #include <concepts>
 #include <cstddef>
@@ -778,5 +779,14 @@ template<class T> constexpr T __div_ceil(T x, T y) noexcept {
     if (x % y > 0) { ++result; }
     return result;
 }
+
+template< range R, class Allocator = std::allocator<std::byte> >
+struct elements_of {
+    [[no_unique_address]] R range;
+    [[no_unique_address]] Allocator allocator;
+};
+
+template< class R, class Allocator = std::allocator<std::byte> >
+elements_of( R&&, Allocator = Allocator() ) -> elements_of<R&&, Allocator>;
 
 }  // namespace std::ranges

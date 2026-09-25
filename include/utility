@@ -462,27 +462,7 @@ template<class T1, class T2, class U1, class U2> requires requires {
 
 template<class T, class U> pair(T, U) -> pair<T, U>;
 
-template<class T> struct __cw_fixed_value {
-    using type = T;
-    constexpr __cw_fixed_value(type v) noexcept: data(v) {}
-    T data;
-};
-
-template<class T, size_t Extent> struct __cw_fixed_value<T[Extent]> {
-    using type = T[Extent];
-    constexpr __cw_fixed_value(T (&arr)[Extent]) noexcept
-        : __cw_fixed_value(make_index_sequence<Extent>{}, arr) {}
-    T data[Extent];
-
-private:
-    template<size_t... Is>
-    constexpr __cw_fixed_value(index_sequence<Is...>, T (&arr)[Extent]) noexcept
-        : data{arr[Is]...} {}
-};
-
-template<class T, size_t Extent> __cw_fixed_value(T (&)[Extent]) -> __cw_fixed_value<T[Extent]>;
-
-template<__cw_fixed_value X, class = typename decltype(X)::type> struct constant_wrapper;
+template<auto X, class = decltype(X)> struct constant_wrapper;
 
 template<class T> concept __constexpr_param = requires { typename constant_wrapper<T::value>; };
 
@@ -668,10 +648,11 @@ struct __cw_operators {
     }
 };
 
-template<__cw_fixed_value X, class> struct constant_wrapper: __cw_operators {
-    static constexpr auto const& value = X.data;
-    using type                         = constant_wrapper;
-    using value_type                   = decltype(X)::type;
+template<auto X, class T> struct constant_wrapper: __cw_operators {
+    static_assert(is_same_v<decltype(X), T>);
+    static constexpr decltype(auto) value = (X);
+    using type                            = constant_wrapper;
+    using value_type                      = decltype(X);
 
     template<__constexpr_param R>
     constexpr auto operator=(R) const noexcept -> constant_wrapper<(value = R::value)> {
@@ -681,11 +662,11 @@ template<__cw_fixed_value X, class> struct constant_wrapper: __cw_operators {
     constexpr operator decltype(value)() const noexcept { return value; }
 
     template<class... Args>
-    static constexpr decltype(auto) operator()(Args&&...) noexcept(
-        noexcept(std::invoke(value, remove_cvref_t<Args>::value...))
-    ) requires(__constexpr_param<remove_cvref_t<Args>> && ...) && requires {
-        typename constant_wrapper<std::invoke(value, remove_cvref_t<Args>::value...)>;
-    } {
+    static constexpr decltype(auto)
+    operator()(Args&&...) noexcept(noexcept(std::invoke(value, remove_cvref_t<Args>::value...)))
+        requires(__constexpr_param<remove_cvref_t<Args>> && ...) && requires {
+            typename constant_wrapper<std::invoke(value, remove_cvref_t<Args>::value...)>;
+        } {
         return constant_wrapper<std::invoke(value, remove_cvref_t<Args>::value...)>{};
     }
 
@@ -710,10 +691,10 @@ template<__cw_fixed_value X, class> struct constant_wrapper: __cw_operators {
     }
 };
 
-template<__cw_fixed_value X> constexpr auto cw = constant_wrapper<X>{};
+template<auto X> constexpr auto cw = constant_wrapper<X>{};
 
 template<class> inline constexpr bool __is_constant_wrapper_v = false;
-template<__cw_fixed_value X, class T>
+template<auto X, class T>
 inline constexpr bool __is_constant_wrapper_v<constant_wrapper<X, T>> = true;
 
 template<class T>
@@ -765,5 +746,10 @@ template<class R, class T> constexpr bool in_range(T t) noexcept {
     return cmp_greater_equal(t, numeric_limits<R>::min())
         && cmp_less_equal(t, numeric_limits<R>::max());
 }
+
+struct sorted_unique_t {
+    explicit sorted_unique_t() = default;
+};
+inline constexpr sorted_unique_t sorted_unique{};
 
 }  // namespace std

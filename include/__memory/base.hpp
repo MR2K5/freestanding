@@ -141,6 +141,20 @@ template<size_t Alignment, class T> inline bool is_sufficiently_aligned(T* ptr) 
     return __builtin_is_aligned(ptr, Alignment);
 }
 
+template<class T, class Alloc>
+struct uses_allocator: false_type {};
+
+template<class T, class Alloc>
+requires requires {
+    typename T::allocator_type;
+    requires convertible_to<Alloc, typename T::allocator_type>;
+}
+struct uses_allocator<T, Alloc>: true_type {};
+
+template<class T, class A>
+inline constexpr bool uses_allocator_v = uses_allocator<T, A>::value;
+
+
 // allocator_arg_t in <utility>
 
 }  // namespace std

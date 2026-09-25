@@ -2,9 +2,13 @@
 
 #include <__algorithm/heap.hpp>
 #include <__algorithm/mutating.hpp>
+#include <__memory/algorithms.hpp>
+#include <__memory/unique_ptr.hpp>
 #include <__ranges/core.hpp>
 #include <__ranges/result_types.hpp>
 #include <__ranges/subrange.hpp>
+#include <cstddef>
+#include <new>
 
 namespace std::ranges {
 
@@ -383,6 +387,238 @@ inline constexpr struct __merge_fn {
     }
 } merge;
 
-// TODO inplace_merge, stable_sort
+// TODO stable_sort
+
+inline constexpr struct __inplace_merge_fn {
+private:
+    // Fallback: O(N log N) divide-and-conquer via rotations (0 bytes allocated)
+    template<bidirectional_iterator I, class Comp, class Proj>
+    static constexpr void inplace_merge_slow(
+        I first, I middle, I last, iter_difference_t<I> n1, iter_difference_t<I> n2, Comp comp,
+        Proj proj
+    ) {
+        if (n1 == 0 || n2 == 0) return;
+
+        // Base case: 1 element in each half
+        if (n1 + n2 == 2) {
+            if (std::invoke(comp, std::invoke(proj, *middle), std::invoke(proj, *first))) {
+                ranges::iter_swap(first, middle);
+            }
+            return;
+        }
+
+        I cut1                  = first;
+        I cut2                  = middle;
+        iter_difference_t<I> d1 = 0;
+        iter_difference_t<I> d2 = 0;
+
+        if (n1 >= n2) {
+            // Bisect left partition
+            d1 = n1 / 2;
+            ranges::advance(cut1, d1);
+
+            // Find first element in [middle, last) where !(proj(elem) < proj(*cut1))
+            // Pass the PROJECTED value to ranges::lower_bound
+            auto&& projected_val = std::invoke(proj, *cut1);
+            cut2                 = ranges::lower_bound(middle, last, projected_val, comp, proj);
+            d2                   = ranges::distance(middle, cut2);
+        } else {
+            // Bisect right partition
+            d2 = n2 / 2;
+            ranges::advance(cut2, d2);
+
+            // Find first element in [first, middle) where proj(*cut2) < proj(elem)
+            auto&& projected_val = std::invoke(proj, *cut2);
+            cut1                 = ranges::upper_bound(first, middle, projected_val, comp, proj);
+            d1                   = ranges::distance(first, cut1);
+        }
+
+        // Rotate Block A and Block B into relative order
+        I new_middle = ranges::rotate(cut1, middle, cut2).begin();
+
+        // Recurse on both halves
+        inplace_merge_slow(first, cut1, new_middle, d1, d2, std::ref(comp), std::ref(proj));
+        inplace_merge_slow(
+            new_middle, cut2, last, n1 - d1, n2 - d2, std::ref(comp), std::ref(proj)
+        );
+    }
+
+    template<typename T> struct ScratchBuffer {
+        T* ptr                  = nullptr;
+        std::size_t capacity    = 0;
+        std::size_t constructed = 0;
+
+        // Allocate uninitialized memory without constructing any objects
+        constexpr explicit ScratchBuffer(std::size_t n) noexcept {
+            // Use std::nothrow so failure falls back gracefully to O(N log N)
+            if constexpr (alignof(T) > alignof(max_align_t))
+                ptr = static_cast<T*>(
+                    ::operator new(n * sizeof(T), std::align_val_t(alignof(T)), std::nothrow)
+                );
+            else
+                ptr = static_cast<T*>(::operator new(n * sizeof(T), std::nothrow));
+            if (ptr) { capacity = n; }
+        }
+
+        // Move-construct elements from [first, last) into the buffer
+        template<std::bidirectional_iterator I> constexpr void move_in(I first, I last) {
+            for (auto it = first; it != last; ++it) {
+                ::new (static_cast<void*>(ptr + constructed)) T(ranges::iter_move(it));
+                ++constructed;
+            }
+        }
+
+        // Clean up: destroy constructed elements, then free raw memory
+        constexpr ~ScratchBuffer() {
+            if (ptr) {
+                ranges::destroy_n(ptr, constructed);
+                if constexpr (alignof(T) > alignof(max_align_t))
+                    ::operator delete(ptr, align_val_t(alignof(T)));
+                else
+                    ::operator delete(ptr);
+            }
+        }
+
+        ScratchBuffer(ScratchBuffer const&)            = delete;
+        ScratchBuffer& operator=(ScratchBuffer const&) = delete;
+    };
+
+    template<std::bidirectional_iterator I, class Comp, class Proj>
+    static constexpr bool try_inplace_merge_buffered(
+        I first, I middle, I last, std::iter_difference_t<I> n1, std::iter_difference_t<I> n2,
+        Comp comp, Proj proj
+    ) {
+        using ValueType = std::iter_value_t<I>;
+
+        // =========================================================================
+        // CASE 1: Left partition is smaller or equal (n1 <= n2)
+        // Strategy: Buffer [first, middle), merge FORWARD from first to last
+        // =========================================================================
+        if (n1 <= n2) {
+            ScratchBuffer<ValueType> buf(static_cast<std::size_t>(n1));
+            if (!buf.ptr) {
+                return false;  // Out of memory -> fallback to O(N log N)
+            }
+
+            buf.move_in(first, middle);
+
+            ValueType* left_cur = buf.ptr;
+            ValueType* left_end = buf.ptr + n1;
+            I right_cur         = middle;
+            I dest              = first;
+
+            while (left_cur != left_end && right_cur != last) {
+                // Stability: if elements are equivalent, take from left first
+                if (std::invoke(
+                        comp, std::invoke(proj, *right_cur), std::invoke(proj, *left_cur)
+                    )) {
+                    *dest = ranges::iter_move(right_cur);
+                    ++right_cur;
+                } else {
+                    *dest = std::move(*left_cur);
+                    ++left_cur;
+                }
+                ++dest;
+            }
+
+            // Drain any remaining elements from the scratch buffer
+            while (left_cur != left_end) {
+                *dest = std::move(*left_cur);
+                ++left_cur;
+                ++dest;
+            }
+            // Remaining right-side elements are already in place
+
+            return true;
+        }
+
+        // =========================================================================
+        // CASE 2: Right partition is smaller (n2 < n1)
+        // Strategy: Buffer [middle, last), merge BACKWARD from last down to first
+        // =========================================================================
+        ScratchBuffer<ValueType> buf(static_cast<std::size_t>(n2));
+        if (!buf.ptr) {
+            return false;  // Out of memory -> fallback to O(N log N)
+        }
+
+        buf.move_in(middle, last);
+
+        I left_cur             = middle;
+        I left_begin           = first;
+        ValueType* right_cur   = buf.ptr + n2;
+        ValueType* right_begin = buf.ptr;
+        I dest                 = last;
+
+        while (left_cur != left_begin && right_cur != right_begin) {
+            auto left_prev   = ranges::prev(left_cur);
+            auto* right_prev = right_cur - 1;
+
+            --dest;
+            // Stability check in reverse:
+            // Only select left if it is STRICTLY greater than right.
+            // If left and right are equivalent, we MUST pick right so that
+            // the right element ends up further toward the end (preserving stability).
+            if (std::invoke(comp, std::invoke(proj, *right_prev), std::invoke(proj, *left_prev))) {
+                *dest    = ranges::iter_move(left_prev);
+                left_cur = left_prev;
+            } else {
+                *dest     = std::move(*right_prev);
+                right_cur = right_prev;
+            }
+        }
+
+        // Drain remaining elements from the scratch buffer
+        while (right_cur != right_begin) {
+            --dest;
+            --right_cur;
+            *dest = std::move(*right_cur);
+        }
+        // Remaining left-side elements are already in place in [first, dest)
+
+        return true;
+    }
+
+public:
+    // (1) Iterator + Sentinel overload
+    template<
+        bidirectional_iterator I, sentinel_for<I> S, class Comp = ranges::less,
+        class Proj = identity>
+    requires sortable<I, Comp, Proj>
+    constexpr I operator()(I first, I middle, S last, Comp comp = {}, Proj proj = {}) const {
+        // Materialize sentinel into a concrete bidirectional iterator
+        I last_it = ranges::next(middle, last);
+
+        auto n1 = ranges::distance(first, middle);
+        auto n2 = ranges::distance(middle, last_it);
+
+        if (n1 == 0 || n2 == 0) return last_it;
+
+        // TODO We prob can remove this
+        if !consteval {
+            if (try_inplace_merge_buffered(
+                    first, middle, last_it, n1, n2, std::ref(comp), std::ref(proj)
+                ))
+                return last_it;
+        }
+
+        // In standard library implementations:
+        // Try fast O(N) path using temporary buffer allocation if runtime / non-constexpr.
+        // Fall back to rotation-based O(N log N) if allocation fails or during constexpr
+        // evaluation.
+        inplace_merge_slow(first, middle, last_it, n1, n2, std::ref(comp), std::ref(proj));
+
+        return last_it;
+    }
+
+    // (2) Range overload
+    template<ranges::bidirectional_range R, class Comp = ranges::less, class Proj = identity>
+    requires sortable<ranges::iterator_t<R>, Comp, Proj> constexpr ranges::borrowed_iterator_t<R>
+    operator()(R&& r, ranges::iterator_t<R> middle, Comp comp = {}, Proj proj = {}) const {
+        return (*this)(
+            ranges::begin(r), std::move(middle), ranges::end(r), std::move(comp),
+            std::move(proj)
+        );
+    }
+} inplace_merge;
 
 }  // namespace std::ranges

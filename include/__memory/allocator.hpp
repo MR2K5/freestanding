@@ -1,10 +1,13 @@
 #pragma once
 
 #include <__memory/base.hpp>
+#include <concepts>
 #include <cstddef>
 #include <limits>
-#include <new>
+#include <type_traits>
 #include <utility>
+
+#include <tuple>
 
 namespace std {
 
@@ -262,7 +265,7 @@ public:
     constexpr allocator& operator=(allocator const&) = default;
 
     constexpr T* allocate(size_t n) {
-        if (numeric_limits<size_t>::max() / sizeof(T) < n) _THROW(std::bad_alloc());
+        if (numeric_limits<size_t>::max() / sizeof(T) < n) _THROW(std::bad_array_new_length());
         if constexpr (alignof(T) <= alignof(std::max_align_t))
             return __builtin_operator_new(n);
         else
@@ -290,5 +293,146 @@ public:
 };
 
 #endif
+
+template<class T, class Alloc, class... As>
+requires(!__is_specialization_of_v<pair, remove_cv_t<T>>)
+constexpr auto uses_allocator_construction_args(Alloc const& alloc, As&&... as) noexcept {
+    constexpr bool uses_alloc = uses_allocator_v<remove_cv_t<T>, Alloc>;
+
+    if constexpr (!uses_alloc && is_constructible_v<T, As...>) {
+        return std::forward_as_tuple(FWD(as)...);
+    } else if constexpr (
+        uses_alloc && is_constructible_v<T, allocator_arg_t, Alloc const&, As...>
+    ) {
+        return tuple<allocator_arg_t, Alloc const&, As&&...>{allocator_arg, alloc, FWD(as)...};
+    } else if constexpr (uses_alloc && is_constructible_v<T, As..., Alloc const&>) {
+        return std::forward_as_tuple(FWD(as)..., alloc);
+    } else {
+        static_assert(false, "uses_allocation_construction_args not valid");
+    }
+}
+
+template<class T, class Alloc, class Tuple1, class Tuple2>
+requires __is_specialization_of_v<pair, remove_cv_t<T>>
+constexpr auto uses_allocator_construction_args(
+    Alloc const& alloc, piecewise_construct_t, Tuple1&& x, Tuple2&& y
+) noexcept {
+    using T1 = T::first_type;
+    using T2 = T::second_type;
+
+    return std::make_tuple(
+        piecewise_construct,
+        std::apply(
+            [&alloc](auto&&... args1) {
+                return uses_allocator_construction_args<T1>(alloc, FWD(args1)...);
+            },
+            FWD(x)
+        ),
+        std::apply(
+            [&alloc](auto&&... args2) {
+                return uses_allocator_construction_args<T2>(alloc, FWD(args2)...);
+            },
+            FWD(y)
+        )
+    );
+}
+
+template<class T, class Alloc> requires __is_specialization_of_v<pair, remove_cv_t<T>>
+constexpr auto uses_allocator_construction_args(Alloc const& alloc) noexcept {
+    return uses_allocator_construction_args<T>(alloc, piecewise_construct, tuple<>{}, tuple<>{});
+}
+
+template<class T, class Alloc, class U, class V>
+requires __is_specialization_of_v<pair, remove_cv_t<T>>
+constexpr auto uses_allocator_construction_args(Alloc const& alloc, U&& u, V&& v) noexcept {
+    return uses_allocator_construction_args<T>(
+        alloc, piecewise_construct, std::forward_as_tuple(FWD(u)), std::forward_as_tuple(FWD(v))
+    );
+}
+
+template<class T, class Alloc, class U, class V>
+requires __is_specialization_of_v<pair, remove_cv_t<T>>
+constexpr auto uses_allocator_construction_args(Alloc const& alloc, pair<U, V>& pr) noexcept {
+    return uses_allocator_construction_args<T>(
+        alloc, piecewise_construct, std::forward_as_tuple(pr.first),
+        std::forward_as_tuple(pr.second)
+    );
+}
+
+template<class T, class Alloc, class U, class V>
+requires __is_specialization_of_v<pair, remove_cv_t<T>>
+constexpr auto uses_allocator_construction_args(Alloc const& alloc, pair<U, V> const& pr) noexcept {
+    return uses_allocator_construction_args<T>(
+        alloc, piecewise_construct, std::forward_as_tuple(pr.first),
+        std::forward_as_tuple(pr.second)
+    );
+}
+
+template<class T, class Alloc, class U, class V>
+requires __is_specialization_of_v<pair, remove_cv_t<T>>
+constexpr auto uses_allocator_construction_args(Alloc const& alloc, pair<U, V>&& pr) noexcept {
+    return uses_allocator_construction_args<T>(
+        alloc, piecewise_construct, forward_as_tuple(get<0>(std::move(pr))),
+        forward_as_tuple(get<1>(std::move(pr)))
+    );
+}
+
+template<class T, class Alloc, class U, class V>
+requires __is_specialization_of_v<pair, remove_cv_t<T>> constexpr auto
+uses_allocator_construction_args(Alloc const& alloc, pair<U, V> const&& pr) noexcept {
+    return uses_allocator_construction_args<T>(
+        alloc, piecewise_construct, forward_as_tuple(get<0>(std::move(pr))),
+        forward_as_tuple(get<1>(std::move(pr)))
+    );
+}
+
+template<class T, class Alloc, __pair_like P>
+requires __is_specialization_of_v<pair, remove_cv_t<T>> && (!__is_subrange_v<remove_cvref_t<P>>)
+constexpr auto uses_allocator_construction_args(Alloc const& alloc, P&& p) noexcept {
+    return uses_allocator_construction_args<T>(
+        alloc, piecewise_construct, forward_as_tuple(get<0>(FWD(p))),
+        forward_as_tuple(get<1>(FWD(p)))
+    );
+}
+
+template<class T, class Alloc, class U>
+requires __is_specialization_of_v<pair, remove_cv_t<T>> && (__is_subrange_v<remove_cvref_t<U>> || (!__pair_like<U> && !requires(U&& u) {
+                                                                []<class A, class B>(
+                                                                    pair<A, B> const&
+                                                                ) {
+                                                                }(FWD(u));
+                                                            })) constexpr auto uses_allocator_construction_args(Alloc const& alloc, U&& u) noexcept {
+    struct pair_constructor {
+        using pair_type = remove_cv_t<T>;
+
+        constexpr auto __do_construct(pair_type const& p) const {
+            return make_obj_using_allocator<pair_type>(alloc_, p);
+        }
+        constexpr auto __do_construct(pair_type&& p) const {
+            return make_obj_using_allocator<pair_type>(alloc_, std::move(p));
+        }
+
+        Alloc const& alloc_;
+        U& u_;
+
+    public:
+        constexpr operator pair_type() const { return __do_construct(std::forward<U>(u_)); }
+    };
+
+    return std::make_tuple(pair_constructor{.alloc_ = alloc, .u_ = u});
+}
+
+template<class T, class Alloc, class... Args>
+constexpr T make_obj_using_allocator(Alloc const& alloc, Args&&... args) {
+    return make_from_tuple<T>(uses_allocator_construction_args<T>(alloc, FWD(args)...));
+}
+
+template<class T, class Alloc, class... Args>
+constexpr T* uninitialized_construct_using_allocator(T* p, Alloc const& alloc, Args&&... args) {
+    return std::apply(
+        [&](auto&&... xs) { return construct_at(p, FWD(xs)...); },
+        uses_allocator_construction_args<T>(alloc, FWD(args)...)
+    );
+}
 
 }  // namespace std

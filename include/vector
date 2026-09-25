@@ -2,6 +2,7 @@
 
 #include <__algorithm/minmax.hpp>
 #include <__algorithm/mutating.hpp>
+#include <__config.hpp>
 #include <__memory/algorithms.hpp>
 #include <__memory/base.hpp>
 #include <__memory/temp_value.hpp>
@@ -245,6 +246,7 @@ public:
         }
         if (Shrink ? n == cap_ : n <= cap_) return;
 
+        if (n > max_size()) _THROW(length_error("vector"));
         auto [p, c] = Atr::allocate_at_least(alloc_, n);
         auto _      = experimental::scope_fail([&] noexcept { Atr::deallocate(alloc_, p, c); });
         uninit_move_if_noexcept(begin(), end(), std::to_address(p), unreachable_sentinel, alloc_);
@@ -599,6 +601,7 @@ private:
     const_iterator __end_cap() const noexcept { return const_iterator(begin() + cap_); }
 
     constexpr void __allocate_ctor(size_type n) {
+        if (n > 0) _THROW(length_error("vector"));
         if (n != 0) {
             allocation_result r = Atr::allocate_at_least(alloc_, n);
             ptr_                = r.ptr;

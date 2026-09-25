@@ -317,6 +317,17 @@ template<class T> using remove_all_extents_t = __remove_all_extents(T);
 template<class T, unsigned N = 0> struct extent: integral_constant<size_t, __array_extent(T, N)> {};
 template<class T, unsigned N = 0> inline constexpr size_t extent_v = __array_extent(T, N);
 
+template<class T> struct alignment_of: integral_constant<size_t, alignof(T)> {};
+template<class T> inline constexpr size_t alignment_of_v = alignof(T);
+
+template<class T> struct rank: public integral_constant<size_t, 0> {};
+
+template<class T> inline constexpr bool rank_v = rank<T>::value;
+
+template<class T> struct rank<T[]>: public integral_constant<size_t, rank_v<T> + 1> {};
+
+template<class T, size_t N> struct rank<T[N]>: public integral_constant<size_t, rank_v<T> + 1> {};
+
 //
 template<bool B, class T, class F> struct conditional {
     using type = T;
@@ -392,7 +403,11 @@ template<class... As> struct common_type;
 
 template<class... As> using __common_type_t = common_type<As...>::type;
 
-struct __empty {};
+struct __empty {
+    __empty() = default;
+    constexpr __empty(auto&&...) noexcept {};
+    __empty& operator=(auto&&) noexcept {return *this;}
+};
 template<class... As>
 struct common_type: __builtin_common_type<__common_type_t, type_identity, __empty, As...> {};
 
@@ -567,6 +582,18 @@ template<class From, class To> struct __copy_cv<From const volatile, To> {
 };
 
 template<class From, class To> using __copy_cv_t = typename __copy_cv<From, To>::type;
+
+template<class T> inline constexpr bool __is_structured_binding_v = requires {__builtin_structured_binding_size(T);};
+template<class T>
+inline constexpr size_t __structured_binding_size_v = __builtin_structured_binding_size(T);
+
+template<size_t I, class T>
+requires __is_structured_binding_v<T> && (__structured_binding_size_v<T> > I)
+using __structured_binding_element_t = decltype([](T&& t) {
+    auto&& [...ts] = FWD(t);
+    return type_identity<decltype(ts...[I])>();
+}(declval<T&&>()))::type;
+
 
 }  // namespace std
 
