@@ -126,6 +126,12 @@ public:
 template<class W, class Bound = unreachable_sentinel_t>
 repeat_view(W, Bound = Bound()) -> repeat_view<W, Bound>;
 
+template<class> inline constexpr bool __is_repeat_view = false;
+template<class W, class B> inline constexpr bool __is_repeat_view<repeat_view<W, B>> = true;
+
+template<class> inline constexpr bool __is_bounded_repeat_view = false;
+template<class W, class B> requires (!is_same_v<B, unreachable_sentinel_t>) inline constexpr bool __is_bounded_repeat_view<repeat_view<W, B>> = true;
+
 namespace views {
 
 inline constexpr struct __repeat_fn {

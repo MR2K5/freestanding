@@ -267,11 +267,11 @@ public:
     constexpr T* allocate(size_t n) {
         if (numeric_limits<size_t>::max() / sizeof(T) < n) _THROW(std::bad_array_new_length());
         if constexpr (alignof(T) <= alignof(std::max_align_t))
-            return __builtin_operator_new(n);
+            return static_cast<T*>(__builtin_operator_new(n));
         else
-            return __builtin_operator_new(n, std::align_val_t(alignof(T)));
+            return static_cast<T*>(__builtin_operator_new(n, std::align_val_t(alignof(T))));
     }
-    constexpr allocation_result<T*> allocate_at_least(size_t n) { return allocate(n); }
+    constexpr allocation_result<T*> allocate_at_least(size_t n) { return {.ptr = allocate(n), .count = n}; }
     constexpr void deallocate(T* p, size_t n) {
         if constexpr (alignof(T) <= alignof(std::max_align_t))
             __builtin_operator_delete(p, n);

@@ -3,6 +3,7 @@
 #include <__algorithm/minmax.hpp>
 #include <__algorithm/mutating.hpp>
 #include <__config.hpp>
+#include <__iterator/concepts.hpp>
 #include <__memory/algorithms.hpp>
 #include <__memory/base.hpp>
 #include <__memory/temp_value.hpp>
@@ -63,7 +64,7 @@ public:
         size_ = n;
     }
 
-    template<input_iterator InputIterator>
+    template<__detail::__LegacyInputIterator InputIterator>
     constexpr vector(InputIterator first, InputIterator last, A const& a = A())
         : vector(from_range, ranges::subrange(std::move(first), std::move(last)), a) {}
 
@@ -152,7 +153,7 @@ public:
         assign(il);
         return *this;
     }
-    template<input_iterator InputIterator>
+    template<__detail::__LegacyInputIterator InputIterator>
     constexpr void assign(InputIterator first, InputIterator last) {
         assign_range(ranges::subrange(std::move(first), std::move(last)));
     }
@@ -455,7 +456,7 @@ public:
         // Create a copy to handle aliasing problems
         return insert_range(position, views::repeat(x, n));
     }
-    template<class InputIterator>
+    template<__detail::__LegacyInputIterator InputIterator>
     constexpr iterator insert(const_iterator position, InputIterator first, InputIterator last) {
         return insert_range(position, ranges::subrange(std::move(first), std::move(last)));
     }
@@ -625,7 +626,7 @@ private:
     }
 };
 
-template<class InputIterator, class A = allocator<iter_value_t<InputIterator>>>
+template<__detail::__LegacyInputIterator InputIterator, class A = allocator<iter_value_t<InputIterator>>>
 vector(InputIterator, InputIterator, A = A()) -> vector<iter_value_t<InputIterator>, A>;
 
 template<ranges::input_range R, class A = allocator<ranges::range_value_t<R>>>

@@ -171,4 +171,13 @@ template<unsigned_integral T> constexpr T bit_reverse(T t) noexcept {
     return __builtin_bitreverseg(t);
 }
 
+// TODO repeat,compress,expand. Pending intrinsics
+template<class T> constexpr T bit_repeat(T x, int l);
+template<class T> constexpr T bit_compress(T x, T m) noexcept {
+    return __builtin_elementwise_pdep(x, m);
+}
+template<class T> constexpr T bit_expand(T x, T m) noexcept {
+    return __builtin_elementwise_pext(x, m);
+}
+
 }  // namespace std

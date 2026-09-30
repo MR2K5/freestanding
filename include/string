@@ -1,0 +1,1621 @@
+#pragma once
+
+#include <__algorithm/minmax.hpp>
+#include <__algorithm/mutating.hpp>
+#include <__config.hpp>
+#include <__functional/hash.hpp>
+#include <__iterator/adaptors.hpp>
+#include <__iterator/concepts.hpp>
+#include <__memory/allocator.hpp>
+#include <__ranges/core.hpp>
+#include <__ranges/subrange.hpp>
+#include <__string/char_traits.hpp>
+#include <bit>
+#include <cassert>
+#include <concepts>
+#include <cstddef>
+#include <experimental/scope>
+#include <stdexcept>
+#include <string_view>
+#include <type_traits>
+#include <utility>
+
+namespace std {
+
+// BUG Note that this string implementation deos not give a strong exception safety on throwing
+// iterators
+// BUG Need to check that basic guarantee is given esp. wrt. null terminator
+
+// Asks if T* can alias U*
+template<class T, class U>
+inline constexpr bool __may_alias_v =
+    // 1. Same underlying type (ignoring const/volatile)
+    std::same_as<std::remove_cv_t<T>, std::remove_cv_t<U>> ||
+    // 2. Signed/Unsigned integer/char variants of identical size
+    (std::integral<T> && std::integral<U> && sizeof(T) == sizeof(U)
+     && !std::same_as<T, bool> && !std::same_as<U, bool>)
+    ||
+    // 3. T is a universal byte-aliasing type inspecting U
+    (std::same_as<std::remove_cv_t<T>, char> || std::same_as<std::remove_cv_t<T>, unsigned char>
+     || std::same_as<std::remove_cv_t<T>, std::byte>);
+
+template<class Ch, class Tr = char_traits<Ch>, class Allocator = allocator<Ch>> class basic_string {
+    static_assert(is_same_v<typename Tr::char_type, Ch>);
+    static_assert(is_same_v<typename Allocator::value_type, Ch>);
+    static_assert(
+        is_trivially_constructible_v<Ch> && is_trivially_copyable_v<Ch> && is_standard_layout_v<Ch>,
+        "string: char_type must be trivial"
+    );
+
+    using Atr                                = allocator_traits<Allocator>;
+    static constexpr bool alloc_always_equal = Atr::is_always_equal::value;
+    static constexpr bool pocca              = Atr::propagate_on_container_copy_assignment::value;
+    static constexpr bool pocma              = Atr::propagate_on_container_move_assignment::value;
+    static constexpr bool pocs               = Atr::propagate_on_container_swap::value;
+
+    using view_type = basic_string_view<Ch, Tr>;
+    using __self    = type_identity_t<basic_string>;
+
+    template<class R>
+    static constexpr bool __str_sized_range =
+        ranges::sized_range<R>
+        || (!ranges::approximately_sized_range<R> && ranges::forward_range<R>);
+    template<class R> requires __str_sized_range<R>
+    static constexpr decltype(auto) __str_range_size(R&& r) {
+        if constexpr (ranges::sized_range<R>)
+            return ranges::size(r);
+        else
+            return ranges::distance(r);
+    }
+
+public:
+    // types
+    using traits_type     = Tr;
+    using value_type      = Ch;
+    using allocator_type  = Allocator;
+    using size_type       = allocator_traits<Allocator>::size_type;
+    using difference_type = allocator_traits<Allocator>::difference_type;
+    using pointer         = allocator_traits<Allocator>::pointer;
+    using const_pointer   = allocator_traits<Allocator>::const_pointer;
+    using reference       = value_type&;
+    using const_reference = value_type const&;
+
+    using iterator                  = Ch*;        // see [container.requirements]
+    using const_iterator            = Ch const*;  // see [container.requirements]
+    using reverse_iterator          = std::reverse_iterator<iterator>;
+    using const_reverse_iterator    = std::reverse_iterator<const_iterator>;
+    static constexpr size_type npos = size_type(-1);
+
+    // [string.cons], construct/copy/destroy
+    constexpr basic_string() noexcept(noexcept(Allocator())): basic_string(Allocator()) {}
+    constexpr explicit basic_string(Allocator const& a) noexcept: alloc_(a) {
+        __set_short_size(0);
+        __set_short_null();
+    }
+
+    constexpr basic_string(basic_string const& str)
+        : basic_string(str, Atr::select_on_container_copy_construction(str.alloc_)) {}
+
+    constexpr basic_string(basic_string&& str) noexcept: alloc_(std::move(str.alloc_)) {
+        if (str.__is_short()) {
+            Tr::copy(__short_data(), str.__short_data(), str.__short_size() + 1);
+            __set_short_size(str.__short_size());
+        } else {
+            __move_long(std::move(str));
+        }
+    }
+
+    constexpr basic_string(basic_string const& str, size_type pos, Allocator const& a = Allocator())
+        : basic_string(str, pos, npos, a) {}
+
+    constexpr basic_string(
+        basic_string const& str, size_type pos, size_type n, Allocator const& a = Allocator()
+    )
+        : alloc_(a) {
+        if (pos > str.size()) [[unlikely]]
+            _THROW(out_of_range("string"));
+        auto len = ranges::min(n, str.size() - pos);
+
+        __ctor_resize(len);
+        Tr::copy(data(), str.data() + pos, len);
+        __set_null();
+    }
+
+    constexpr basic_string(basic_string&& str, size_type pos, Allocator const& a = Allocator())
+        : basic_string(str, pos, npos, a) {}
+    constexpr basic_string(
+        basic_string&& str, size_type pos, size_type n, Allocator const& a = Allocator()
+    )
+        : alloc_(a) {
+        if (pos > str.size()) [[unlikely]]
+            _THROW(out_of_range("string"));
+        auto len = ranges::min(n, str.size() - pos);
+
+        if (len <= short_capacity) {
+            __set_short_size(len);
+            Tr::copy(__short_data(), str.data() + pos, len);
+            __set_short_null();
+            return;
+        }
+
+        if (alloc_always_equal || str.alloc_ == alloc_) {
+            // Steal
+            __move_long(std::move(str));
+            Tr::move(__long_data(), __long_data() + pos, len);  // Trailing null
+            __set_long_size(len);
+        } else {
+            __ctor_resize(len);
+            Tr::copy(__long_data(), str.__long_data() + pos, len);
+        }
+        __set_long_null();
+    }
+
+    template<class T> requires is_convertible_v<T const&, view_type>
+    constexpr basic_string(T const& t, size_type pos, size_type n, Allocator const& a = Allocator())
+        : basic_string(view_type(t).substr(pos, n), a) {}
+
+    template<class T> requires is_convertible_v<T const&, view_type>
+    constexpr explicit basic_string(T const& t, Allocator const& a = Allocator()): alloc_(a) {
+        view_type sv = t;
+        __ctor_resize(sv.size());
+        Tr::copy(data(), sv.data(), sv.size());
+        __set_null();
+    }
+
+    constexpr basic_string(Ch const* s, size_type n, Allocator const& a = Allocator()): alloc_(a) {
+        __ctor_resize(n);
+        Tr::copy(data(), s, n);
+        __set_null();
+    }
+
+    constexpr basic_string(Ch const* s, Allocator const& a = Allocator())
+        requires __simple_allocator<Allocator>
+        : basic_string(s, Tr::length(s), a) {}
+
+    basic_string(nullptr_t) = delete;
+    constexpr basic_string(size_type n, Ch c, Allocator const& a = Allocator())
+        requires __simple_allocator<Allocator>
+        : alloc_(a) {
+        __ctor_resize(n);
+        Tr::assign(data(), n, c);
+        __set_null();
+    }
+
+    template<__detail::__LegacyInputIterator InputIterator>
+    constexpr basic_string(InputIterator begin, InputIterator end, Allocator const& a = Allocator())
+        : basic_string(from_range, ranges::subrange(std::move(begin), std::move(end)), a) {}
+
+    template<ranges::__detail::container_compatible_range<Ch> R>
+    constexpr basic_string(from_range_t, R&& rg, Allocator const& a = Allocator()): alloc_(a) {
+        size_t est = 0;
+        if constexpr (ranges::approximately_sized_range<R>)
+            est = ranges::reserve_hint(rg);
+        else if constexpr (ranges::sized_range<R> || ranges::forward_range<R>)
+            est = ranges::distance(rg);
+
+        __ctor_resize(est);
+
+        Ch* ptr  = data();
+        Ch* pend = data() + capacity();
+        auto beg = ranges::begin(rg);
+        auto end = ranges::end(rg);
+        for (; beg != end && ptr != pend; ++beg, ++ptr) { Tr::assign(*ptr, *beg); }
+
+        __set_size(ptr - data());
+        __set_null();
+
+        for (; beg != end; ++beg) push_back(*beg);
+    }
+
+    constexpr basic_string(initializer_list<Ch> il, Allocator const& a = Allocator())
+        : basic_string(from_range, il, a) {}
+
+    constexpr basic_string(basic_string const& o, Allocator const& a): alloc_(a) {
+        __ctor_resize(o.size());
+        Tr::copy(data(), o.data(), o.size() + 1);  // Null
+    }
+    constexpr basic_string(basic_string&& o, Allocator const& a): alloc_(a) {
+        if (o.__is_short()) {
+            Tr::copy(__short_data(), o.__short_data(), o.__short_size() + 1);
+            __set_short_size(o.__short_size());
+            return;
+        }
+
+        if (alloc_always_equal || o.alloc_ == alloc_) {
+            __move_long(std::move(o));
+        } else {
+            __ctor_resize(o.__long_size());
+            Tr::copy(__long_data(), o.__long_data(), o.__long_size() + 1);
+        }
+    }
+
+    constexpr ~basic_string() {
+        if (!__is_short()) {
+            assert(store.long_.ptr_);
+            __deallocate_long(0);
+        }
+    }
+
+    constexpr basic_string& operator=(basic_string const& str) {
+        if (this == &str) return *this;
+        bool can_reuse = !pocca || alloc_always_equal || alloc_ == str.alloc_;
+
+        if (str.size() <= short_capacity && (__is_short() || !can_reuse)) {
+            if (!__is_short()) __deallocate_long(0);
+            Tr::copy(__short_data(), str.data(), str.size() + 1);
+            __set_short_size(str.size());
+        } else if (can_reuse && str.size() <= capacity()) {
+            // Can reuse current alloc
+            Tr::copy(data(), str.data(), str.size() + 1);
+            __set_size(str.size());
+        } else {
+            // Realloc
+            basic_string tmp(str, pocca ? str.alloc_ : alloc_);
+
+            __move_long(std::move(tmp));
+        }
+
+        if constexpr (pocca) alloc_ = str.alloc_;
+        return *this;
+    }
+
+    constexpr basic_string& operator=(basic_string&& o) noexcept(pocma || alloc_always_equal) {
+        if (this == &o) return *this;
+        auto can_steal = pocma || alloc_always_equal || alloc_ == o.alloc_;
+        auto can_reuse = !pocma || alloc_always_equal || alloc_ == o.alloc_;
+
+        if (can_steal && !o.__is_short()) {
+            // Always steal when possible
+            __move_long(std::move(o));
+        } else if (o.size() <= short_capacity && (__is_short() || !can_reuse)) {
+            if (!__is_short()) __deallocate_long(0);
+            Tr::copy(__short_data(), o.data(), o.size() + 1);
+            __set_short_size(o.size());
+        } else if (can_reuse && o.size() <= capacity()) {
+            Tr::copy(data(), o.data(), o.size() + 1);
+            __set_size(o.size());
+        } else {
+            // Need allocation
+            assert(o.size() > short_capacity);
+            basic_string tmp(std::move(o), pocma ? o.alloc_ : alloc_);
+            __move_long(std::move(tmp));
+        }
+        if constexpr (pocma) alloc_ = std::move(o.alloc_);
+        return *this;
+    }
+
+    template<class T> requires is_convertible_v<T const&, view_type>
+                            && (!is_convertible_v<T const&, Ch const*>)constexpr basic_string&
+    operator=(T const& t) {
+        view_type sv = t;
+        return assign(sv);
+    }
+
+    constexpr basic_string& operator=(Ch const* s) { return assign(s); }
+    basic_string& operator=(nullptr_t) = delete;
+    constexpr basic_string& operator=(Ch c) { return assign(1, c); }
+    constexpr basic_string& operator=(initializer_list<Ch> il) { return assign(il); }
+
+    // [string.iterators], iterators
+    constexpr iterator begin() noexcept { return iterator(data()); }
+    constexpr const_iterator begin() const noexcept { return const_iterator(data()); }
+    constexpr iterator end() noexcept { return iterator(data() + size()); }
+    constexpr const_iterator end() const noexcept { return const_iterator(data() + size()); }
+
+    constexpr reverse_iterator rbegin() noexcept { return reverse_iterator(end()); }
+    constexpr const_reverse_iterator rbegin() const noexcept {
+        return const_reverse_iterator(end());
+    }
+    constexpr reverse_iterator rend() noexcept { return reverse_iterator(begin()); }
+    constexpr const_reverse_iterator rend() const noexcept {
+        return const_reverse_iterator(begin());
+    }
+
+    constexpr const_iterator cbegin() const noexcept { return begin(); }
+    constexpr const_iterator cend() const noexcept { return end(); }
+    constexpr const_reverse_iterator crbegin() const noexcept { return rbegin(); }
+    constexpr const_reverse_iterator crend() const noexcept { return rend(); }
+
+    // [string.capacity], capacity
+    constexpr size_type size() const noexcept {
+        return __is_short() ? __short_size() : __long_size();
+    }
+    constexpr size_type length() const noexcept { return size(); }
+    constexpr size_type max_size() const noexcept { return Atr::max_size(alloc_) / 2 - 1; }
+
+    constexpr void resize(size_type n, Ch c) {
+        if (n <= size()) {
+            __set_size(n);
+            __set_null();
+            return;
+        }
+
+        if (n > capacity()) reserve(n);
+
+        Tr::assign(data() + size(), n, c);
+        __set_size(n);
+        __set_null();
+    }
+    constexpr void resize(size_type n) { resize(n, Ch(0)); }
+
+    template<class Operation> constexpr void resize_and_overwrite(size_type n, Operation op) {
+        static_assert(integral<invoke_result_t<Operation, Ch*, size_type>>);
+
+        reserve(n);
+        auto r = std::move(op)(data(), n);
+        assert(std::cmp_less_equal(r, n));
+        __set_size(size_type(r));
+        __set_null();
+    }
+
+    constexpr size_type capacity() const noexcept {
+        return __is_short() ? __short_cap() : __long_cap();
+    }
+
+    constexpr void reserve(size_type res_arg) {
+        if (res_arg <= capacity()) return;
+
+        basic_string tmp(alloc_);
+        tmp.__ctor_reserve(res_arg);
+        Tr::copy(tmp.__long_data(), data(), size() + 1);
+        tmp.__set_long_size(size());
+
+        __move_long(std::move(tmp));
+    }
+    constexpr void shrink_to_fit() {
+        if (size() == capacity() || __is_short()) return;
+
+        basic_string tmp(alloc_);
+        tmp.reserve(size());
+        if (tmp.capacity() >= capacity()) return;
+
+        Tr::copy(tmp.data(), data(), size() + 1);
+        tmp.__set_size(size());
+
+        if (tmp.__is_short()) {
+            __deallocate_long(tmp.__short_size());
+            Tr::copy(__short_data(), tmp.__short_data(), tmp.__short_size() + 1);
+        } else {
+            __move_long(std::move(tmp));
+        }
+    }
+    constexpr void clear() noexcept {
+        __set_size(0);
+        __set_null();
+    }
+    constexpr bool empty() const noexcept { return size() == 0; }
+
+    // [string.access], element access
+    constexpr const_reference operator[](size_type pos) const {
+        assert(pos <= size());
+        return data()[pos];
+    }
+    constexpr reference operator[](size_type pos) {
+        assert(pos <= size());
+        return data()[pos];
+    }
+
+#ifdef _STL_HAS_EH
+    constexpr const_reference at(size_type n) const {
+        if (n > size()) throw std::out_of_range("string::at");
+        return data()[n];
+    }
+    constexpr reference at(size_type n) {
+        if (n > size()) throw std::out_of_range("string::at");
+        return data()[n];
+    }
+#else
+    constexpr const_reference at(size_type n) const = _DELETE_NO_EXCEPTIONS;
+    constexpr reference at(size_type n)             = _DELETE_NO_EXCEPTIONS;
+#endif
+
+    constexpr const_reference front() const {
+        assert(!empty());
+        return data()[0];
+    }
+    constexpr reference front() {
+        assert(!empty());
+        return data()[0];
+    }
+    constexpr const_reference back() const {
+        assert(!empty());
+        return data()[size() - 1];
+    }
+    constexpr reference back() {
+        assert(!empty());
+        return data()[size() - 1];
+    }
+
+    // [string.modifiers], modifiers
+    constexpr basic_string& operator+=(basic_string const& str) { return append(str); }
+    template<class T> requires is_convertible_v<T const&, basic_string_view<Ch, Tr>>
+                            && (!is_convertible_v<T const&, Ch const*>)constexpr basic_string&
+    operator+=(T const& t) {
+        view_type sv = t;
+        return append(sv);
+    }
+
+    constexpr basic_string& operator+=(Ch const* s) { return append(s); }
+    constexpr basic_string& operator+=(Ch c) {
+        push_back(c);
+        return *this;
+    }
+    constexpr basic_string& operator+=(initializer_list<Ch> il) { return append(il); }
+
+    constexpr basic_string& append(basic_string const& str) {
+        return __append_contiguous(view_type(str));
+    }
+    constexpr basic_string& append(basic_string const& str, size_type pos, size_type n = npos) {
+        return __append_contiguous(str.subview(pos, n));
+    }
+    template<class T> requires is_convertible_v<T const&, basic_string_view<Ch, Tr>>
+                            && (!is_convertible_v<T const&, Ch const*>)constexpr basic_string&
+    append(T const& t) {
+        return __append_contiguous(view_type(t));
+    }
+    template<class T> requires is_convertible_v<T const&, basic_string_view<Ch, Tr>>
+                            && (!is_convertible_v<T const&, Ch const*>)constexpr basic_string&
+    append(T const& t, size_type pos, size_type n = npos) {
+        return __append_contiguous(view_type(t).substr(pos, n));
+    }
+    constexpr basic_string& append(Ch const* s, size_type n) {
+        return __append_contiguous(view_type(s, n));
+    }
+    constexpr basic_string& append(Ch const* s) { return __append_contiguous(view_type(s)); }
+    constexpr basic_string& append(Ch const* s, size_type pos, size_type n) {
+        return __append_contiguous(view_type(s).substr(pos, n));
+    }
+    constexpr basic_string& append(size_type n, Ch c) {
+        return __append_impl(n, [n, c](Ch* tgt) { Tr::assign(tgt, n, c); });
+    }
+    template<__detail::__LegacyInputIterator InputIterator>
+    constexpr basic_string& append(InputIterator first, InputIterator last) {
+        return append_range(ranges::subrange(std::move(first), std::move(last)));
+    }
+    constexpr basic_string& append(initializer_list<Ch> il) {
+        return __append_contiguous(view_type(il.data(), il.size()));
+    }
+
+    template<ranges::__detail::container_compatible_range<Ch> R>
+    constexpr basic_string& append_range(R&& rg) {
+
+        if constexpr (__str_sized_range<R>) {
+            if constexpr (
+                ranges::contiguous_range<R> && same_as<remove_cv_t<ranges::range_value_t<R>>, Ch>
+            ) {
+                return __append_contiguous(view_type(ranges::data(rg), __str_range_size(rg)));
+            } else {
+                __append_impl(__str_range_size(rg), [&](Ch* tgt) {
+                    for (auto&& e: rg) Tr::assign(*tgt++, static_cast<Ch>(FWD(e)));
+                });
+            }
+        } else if constexpr (ranges::approximately_sized_range<R>) {
+            experimental::scope_exit _([&] { __set_null(); });
+
+            size_type est = ranges::reserve_hint(rg);
+            auto beg      = ranges::begin(rg);
+            auto end      = ranges::end(rg);
+
+            if (est + size() <= capacity()) {
+                Ch* tgt = data() + size();
+                for (; beg != end && tgt != data() + capacity(); ++beg)
+                    Tr::assign(*tgt++, static_cast<Ch>(*beg));
+                __set_size(tgt - data());
+
+                if (beg != end) {
+                    __self tmp(
+                        from_range, ranges::subrange(std::move(beg), std::move(end)), alloc_
+                    );
+                    return append(tmp);
+                }
+            } else {
+                __self tmp(alloc_);
+                tmp.__ctor_reserve(__calculate_growth(size() + est));
+                Ch* tgt = tmp.data() + size();
+
+                Tr::copy(tmp.data(), data(), size());
+                for (; beg != end && tgt != tmp.data() + tmp.capacity(); ++beg)
+                    Tr::assign(*tgt++, static_cast<Ch>(*beg));
+
+                tmp.__set_size(tgt - tmp.data());
+
+                if (beg != end) {
+                    __self tmp2(
+                        from_range, ranges::subrange(std::move(beg), std::move(end)), alloc_
+                    );
+                    __move_long(std::move(tmp));
+                    return append(tmp2);
+                } else {
+                    __move_long(std::move(tmp));
+                }
+            }
+        } else {
+            __self tmp(from_range, rg, alloc_);
+            return append(tmp);
+        }
+        return *this;
+    }
+
+    constexpr basic_string& __append_contiguous(view_type sv) {
+        return __append_impl(sv.size(), [&](Ch* tgt) { Tr::copy(tgt, sv.data(), sv.size()); });
+    }
+
+    constexpr basic_string& __append_impl(size_t n, auto&& filler) {
+        experimental::scope_exit _([&] { __set_null(); });  // Even if filler throws
+        auto const sz = size();
+
+        if (sz + n <= capacity()) {
+            filler(data() + sz);
+            __set_size(sz + n);
+
+        } else {
+            __self tmp(alloc_);
+            tmp.__ctor_reserve(__calculate_growth(sz + n));
+            Tr::copy(tmp.data(), data(), sz);
+            filler(tmp.data() + sz);
+            tmp.__set_size(sz + n);
+
+            __move_long(std::move(tmp));
+        }
+        return *this;
+    }
+
+    constexpr void push_back(Ch c) {
+        if (size() == capacity()) { reserve(__calculate_growth(size() + 1)); }
+
+        Tr::assign(data()[size()], c);
+        __set_size(size() + 1);
+        __set_null();
+    }
+
+    constexpr basic_string& assign(basic_string const& str) { return *this = str; }
+    constexpr basic_string& assign(basic_string&& str) noexcept(
+        allocator_traits<Allocator>::propagate_on_container_move_assignment::value
+        || allocator_traits<Allocator>::is_always_equal::value
+    ) {
+        return *this = std::move(str);
+    }
+
+    constexpr basic_string& assign(basic_string const& str, size_type pos, size_type n = npos) {
+        return __assign_contiguous(view_type(str).subview(pos, n));
+    }
+    template<class T> requires is_convertible_v<T const&, basic_string_view<Ch, Tr>>
+                            && (!is_convertible_v<T const&, Ch const*>)constexpr basic_string&
+    assign(T const& t) {
+        return __assign_contiguous(view_type(t));
+    }
+    template<class T> requires is_convertible_v<T const&, basic_string_view<Ch, Tr>>
+                            && (!is_convertible_v<T const&, Ch const*>)constexpr basic_string&
+    assign(T const& t, size_type pos, size_type n = npos) {
+        return __assign_contiguous(view_type(t).substr(pos, n));
+    }
+    constexpr basic_string& assign(Ch const* s, size_type n) {
+        return __assign_contiguous(view_type(s, n));
+    }
+    constexpr basic_string& assign(Ch const* s) { return __assign_contiguous(view_type(s)); }
+    constexpr basic_string& assign(Ch const* s, size_type pos, size_type n) {
+        return __assign_contiguous(view_type(s).substr(pos, n));
+    }
+    constexpr basic_string& assign(size_type n, Ch c) {
+        if (n <= capacity()) {
+            Tr::assign(data(), n, c);
+            __set_size(n);
+            __set_null();
+        } else {
+            __self tmp(n, c, alloc_);
+            __move_long(std::move(tmp));
+        }
+        return *this;
+    }
+    template<__detail::__LegacyInputIterator InputIterator>
+    constexpr basic_string& assign(InputIterator first, InputIterator last) {
+        return assign_range(ranges::subrange(std::move(first), std::move(last)));
+    }
+    constexpr basic_string& assign(initializer_list<Ch> il) {
+        return __assign_contiguous(view_type(il.data(), il.size()));
+    }
+
+    template<ranges::__detail::container_compatible_range<Ch> R>
+    constexpr basic_string& assign_range(R&& rg) {
+        constexpr bool is_exact =
+            ranges::sized_range<R>
+            || (!ranges::approximately_sized_range<R> && ranges::forward_range<R>);
+
+        size_t est = 0;
+        if constexpr (ranges::approximately_sized_range<R>)
+            est = ranges::reserve_hint(rg);
+        else if constexpr (ranges::forward_range<R>)
+            est = ranges::distance(rg);
+
+        if constexpr (ranges::contiguous_range<R> && is_exact) {
+            return __assign_contiguous(view_type(ranges::data(rg), est));
+        } else {
+            __self tmp(from_range, rg, alloc_);
+            if (tmp.size() <= capacity()) {
+                Tr::copy(data(), tmp.data(), tmp.size() + 1);
+                __set_size(tmp.size());
+            } else {
+                __move_long(std::move(tmp));
+            }
+            return *this;
+        }
+    }
+
+    constexpr basic_string& __assign_contiguous(view_type sv) {
+        if (sv.size() <= capacity()) {
+            Tr::move(data(), sv.data(), sv.size());
+            __set_size(sv.size());
+            __set_null();
+        } else {
+            __self tmp(sv.data(), sv.size(), alloc_);
+            __move_long(std::move(tmp));
+        }
+        return *this;
+    }
+
+    constexpr basic_string& insert(size_type pos, basic_string const& str) {
+        return __insert_contiguous(pos, view_type(str), this != &str);
+    }
+    constexpr basic_string&
+    insert(size_type pos1, basic_string const& str, size_type pos2, size_type n = npos) {
+        return __insert_contiguous(pos1, str.subview(pos2, n), this != &str);
+    }
+    template<class T> requires is_convertible_v<T const&, view_type>
+                            && (!is_convertible_v<T const&, Ch const*>)constexpr basic_string&
+    insert(size_type pos, T const& t) {
+        return __insert_contiguous(pos, view_type(t), false);
+    }
+    template<class T> requires is_convertible_v<T const&, view_type>
+                            && (!is_convertible_v<T const&, Ch const*>)constexpr basic_string&
+    insert(size_type pos1, T const& t, size_type pos2, size_type n = npos) {
+        return __insert_contiguous(pos1, view_type(t).subview(pos2, n), false);
+    }
+    constexpr basic_string& insert(size_type pos, Ch const* s, size_type n) {
+        return __insert_contiguous(pos, view_type(s, n), false);
+    }
+    constexpr basic_string& insert(size_type pos, Ch const* s) {
+        return __insert_contiguous(pos, view_type(s), false);
+    }
+    constexpr basic_string& insert(size_type pos, size_type n, Ch c) {
+        return __insert_repeat(pos, n, c);
+    }
+    constexpr iterator insert(const_iterator p, Ch c) {
+        size_type pos = p - cbegin();
+        insert(pos, 1, c);
+        return begin() + pos;
+    }
+    constexpr iterator insert(const_iterator p, size_type n, Ch c) {
+        size_type pos = p - cbegin();
+        insert(pos, n, c);
+        return begin() + pos;
+    }
+    template<__detail::__LegacyInputIterator InputIterator>
+    constexpr iterator insert(const_iterator p, InputIterator first, InputIterator last) {
+        return insert_range(p, ranges::subrange(std::move(first), std::move(last)));
+    }
+    constexpr iterator insert(const_iterator p, initializer_list<Ch> il) {
+        size_type pos = p - cbegin();
+        insert(pos, view_type(il.data(), il.size()));
+        return begin() + pos;
+    }
+
+    template<ranges::__detail::container_compatible_range<Ch> R>
+    constexpr iterator insert_range(const_iterator p, R&& rg) {
+        size_type pos = p - cbegin();
+
+        if constexpr (ranges::sized_range<R>) {
+            experimental::scope_exit _([&] {
+                __set_null();
+            });  // In case an iterator throws, keep the basic guarantee
+            // TODO can there be uninitialized elementsif iter throws?
+
+            if constexpr (
+                ranges::contiguous_range<R> && same_as<remove_cv_t<ranges::range_value_t<R>>, Ch>
+            ) {
+                __insert_contiguous(pos, view_type(ranges::data(rg), ranges::size(rg)), false);
+            } else {
+                __insert_impl(
+                    pos, ranges::size(rg),
+                    !ranges::contiguous_range<R> || __may_alias_v<ranges::range_value_t<R>, Ch>,
+                    [&](Ch* tgt) {
+                        for (auto&& e: rg) Tr::assign(*tgt++, static_cast<Ch>(FWD(e)));
+                    }
+                );
+            }
+        } else {
+            auto old_sz = size();
+            append_range(rg);
+            ranges::rotate(data() + pos, data() + old_sz, data() + size());
+        }
+        return begin() + pos;
+    }
+
+    constexpr basic_string& __insert_impl(size_type pos, size_type n, bool alias, auto&& filler) {
+        if (pos > size()) [[unlikely]]
+            _THROW(out_of_range("string::insert"));
+
+        if (n == 0) return *this;
+
+        if (size() + n > capacity()) {
+            // Grows anyway:
+            __self tmp(alloc_);
+            tmp.reserve(__calculate_growth(size() + n));
+            Tr::copy(tmp.data(), data(), pos);
+            filler(tmp.data() + pos);
+            Tr::copy(tmp.data() + pos + n, data() + pos, size() - pos + 1);
+
+            tmp.__set_size(size() + n);
+            __move_long(std::move(tmp));
+            return *this;
+        }
+
+        if (alias) {
+            filler(data() + size() + 1);
+            ranges::rotate(data() + pos, data() + size() + 1, data() + size() + n + 1);
+            __set_size(size() + n);
+        } else {
+            // Insert
+            auto const sz = size();
+            Tr::move(data() + pos + n, data() + pos, sz - pos + 1);
+            filler(data() + pos);
+            __set_size(sz + n);
+        }
+        return *this;
+    }
+
+    constexpr basic_string& __insert_contiguous(size_type pos, view_type sv, bool ow_no_alias) {
+        bool alias = !ow_no_alias && sv.size() <= size()
+                  && (is_constant_evaluated()
+                      || (__is_aliasing_pointer(sv.data())
+                          && ranges::greater_equal()(sv.data() + sv.size(), data() + pos)));
+
+        // Aliasing is only hurtful if sv overlaps the shifted part
+        return __insert_impl(pos, sv.size(), alias, [&sv](Ch* tgt) {
+            Tr::copy(tgt, sv.data(), sv.size());
+        });
+    }
+
+    constexpr basic_string& __insert_repeat(size_type pos, size_type n, Ch c) {
+        return __insert_impl(pos, n, false, [c, n](Ch* tgt) { Tr::assign(tgt, n, c); });
+    }
+
+    constexpr basic_string& erase(size_type pos = 0, size_type n = npos) {
+        if (pos > size()) [[unlikely]]
+            _THROW(std::out_of_range("string::erase"));
+        erase(begin() + pos, begin() + pos + ranges::min(n, size() - pos));
+        return *this;
+    }
+    constexpr iterator erase(const_iterator p) { return erase(p, p + 1); }
+    constexpr iterator erase(const_iterator first, const_iterator last) {
+        auto len = last - first;
+        auto pos = first - cbegin();
+
+        auto const sz = size();
+        Tr::move(data() + pos, data() + pos + len, size() - pos - len + 1);
+        __set_size(sz - len);
+        return begin() + pos;
+    }
+
+    constexpr void pop_back() {
+        assert(!empty());
+        __set_size(size() - 1);
+        __set_null();
+    }
+
+    constexpr basic_string& replace(size_type pos1, size_type n1, basic_string const& str) {
+        return __replace_contiguous(pos1, n1, view_type(str), this != &str);
+    }
+    constexpr basic_string& replace(
+        size_type pos1, size_type n1, basic_string const& str, size_type pos2, size_type n2 = npos
+    ) {
+        return __replace_contiguous(pos1, n1, subview(pos2, n2), this != &str);
+    }
+    template<class T> requires is_convertible_v<T const&, view_type>
+                            && (!is_convertible_v<T const&, Ch const*>)constexpr basic_string&
+    replace(size_type pos1, size_type n1, T const& t) {
+        return __replace_contiguous(pos1, n1, view_type(t), false);
+    }
+    template<class T> requires is_convertible_v<T const&, view_type>
+                            && (!is_convertible_v<T const&, Ch const*>)constexpr basic_string&
+    replace(size_type pos1, size_type n1, T const& t, size_type pos2, size_type n2 = npos) {
+        return __replace_contiguous(pos1, n1, view_type(t).subview(pos2, n2), false);
+    }
+    constexpr basic_string& replace(size_type pos, size_type n1, Ch const* s, size_type n2) {
+        return __replace_contiguous(pos, n1, view_type(s, n2), false);
+    }
+    constexpr basic_string& replace(size_type pos, size_type n1, Ch const* s) {
+        return __replace_contiguous(pos, n1, view_type(s), false);
+    }
+    constexpr basic_string& replace(size_type pos, size_type n1, size_type n2, Ch c) {
+        return __replace_impl(
+            pos, n1, n2, false, [c, n2](Ch* tgt) { Tr::assign(tgt, n2, c); }, true
+        );
+    }
+    constexpr basic_string& replace(const_iterator i1, const_iterator i2, basic_string const& str) {
+        return replace(i1 - cbegin(), i2 - i1, str);
+    }
+    template<class T> requires is_convertible_v<T const&, view_type>
+                            && (!is_convertible_v<T const&, Ch const*>)constexpr basic_string&
+    replace(const_iterator i1, const_iterator i2, T const& t) {
+        return replace(i1 - cbegin(), i2 - i1, t);
+    }
+    constexpr basic_string&
+    replace(const_iterator i1, const_iterator i2, Ch const* s, size_type n) {
+        return replace(i1 - cbegin(), i2 - i1, s, n);
+    }
+    constexpr basic_string& replace(const_iterator i1, const_iterator i2, Ch const* s) {
+        return replace(i1 - cbegin(), i2 - i1, s);
+    }
+    constexpr basic_string& replace(const_iterator i1, const_iterator i2, size_type n, Ch c) {
+        return replace(i1 - cbegin(), i2 - i1, n, c);
+    }
+    constexpr basic_string& replace(const_iterator i1, const_iterator i2, initializer_list<Ch> il) {
+        return replace(i1 - cbegin(), i2 - i1, il.data(), il.size());
+    }
+
+    template<__detail::__LegacyInputIterator InputIterator>
+    constexpr basic_string&
+    replace(const_iterator i1, const_iterator i2, InputIterator j1, InputIterator j2) {
+        return replace_with_range(i1, i2, ranges::subrange(j1, j2));
+    }
+
+    template<ranges::__detail::container_compatible_range<Ch> R>
+    constexpr basic_string& replace_with_range(const_iterator i1, const_iterator i2, R&& rg) {
+        size_type pos  = i1 - cbegin();
+        size_type rlen = i2 - i1;
+
+        if constexpr (ranges::sized_range<R>) {
+            experimental::scope_exit _([&] { __set_null(); });  // For throwing iter
+
+            // must assume aliasing unless we can prove otherwise
+            if constexpr (
+                ranges::contiguous_range<R> && same_as<remove_cv_t<ranges::range_value_t<R>>, Ch>
+            ) {
+                return __replace_contiguous(
+                    pos, rlen, view_type(ranges::data(rg), ranges::size(rg)), false
+                );
+            } else {
+                return __replace_impl(
+                    pos, rlen, ranges::size(rg),
+                    !ranges::contiguous_range<R> || __may_alias_v<ranges::range_value_t<R>, Ch>,
+                    [&](Ch* tgt) {
+                        for (auto&& elem: rg) Tr::assign(*tgt++, static_cast<Ch>(FWD(elem)));
+                    },
+                    false
+                );
+            }
+
+        } else {
+            auto old_sz = size();
+            append_range(FWD(rg));
+            auto nlen = size() - old_sz;
+            Tr::move(data() + pos, data() + pos + rlen, old_sz + nlen - pos - rlen + 1);
+            ranges::rotate(data() + pos, data() + old_sz - rlen, data() + old_sz + nlen - rlen);
+
+            __set_size(size() - rlen);
+            // __set_null(); // Tr::move handles and rotate does not change size
+        }
+        return *this;
+    }
+
+    constexpr basic_string&
+    __replace_contiguous(size_type pos, size_type rlen, view_type sv, bool noalias_override) {
+        bool alias = !noalias_override && sv.size() <= size()
+                  && (is_constant_evaluated()
+                      || (__is_aliasing_pointer(sv.data())
+                          && ranges::greater_equal()(sv.data() + sv.size(), data() + pos)));
+        return __replace_impl(
+            pos, rlen, sv.size(), alias,
+            [=, this](Ch* tgt) {
+                Ch const* src = sv.data();
+                Tr::move(tgt, src, sv.size());
+            },
+            true
+        );
+    }
+
+    constexpr basic_string& __replace_impl(
+        size_type pos, size_type rlen, size_type nlen, bool alias, auto&& filler,
+        bool filler_uses_move
+    ) {
+        if (pos > size()) [[unlikely]]
+            _THROW(std::out_of_range("string::replace"));
+        rlen                 = ranges::min(rlen, size() - pos);
+        size_type total_size = size() - rlen + nlen;
+
+        // In aliasing case we must append at end and then move. If no aliasing we can directly
+        // write the new part
+        if (total_size <= capacity()) {
+            if (!alias) {
+                // Disjoint: move suffix, then fill
+                Tr::move(data() + pos + nlen, data() + pos + rlen, size() - pos - rlen + 1);
+                filler(data() + pos);
+
+                __set_size(total_size);
+                return *this;
+            } else if (filler_uses_move && rlen >= nlen) {
+                // Shrinking / Equal (Aliased):
+                // Fill into hole FIRST (does not touch suffix), then slide suffix left
+                // filler must use Tr::move
+                filler(data() + pos);
+                Tr::move(data() + pos + nlen, data() + pos + rlen, size() - pos - rlen + 1);
+
+                __set_size(total_size);
+                return *this;
+            } else if (size() + nlen <= capacity()) {
+                // Growing (Aliased):
+                // Use slack past null terminator if it fits, else rebase pointer
+                filler(data() + size() + 1);
+                auto sz = size();
+                Tr::move(data() + pos, data() + pos + rlen, sz + nlen - pos - rlen + 1);
+                ranges::rotate(data() + pos, data() + sz - rlen + 1, data() + sz + nlen - rlen + 1);
+                __set_size(total_size);
+                return *this;
+            }
+        }
+
+        // Need allocation
+        __self tmp(alloc_);
+        tmp.__ctor_reserve(__calculate_growth(total_size));
+        Tr::copy(tmp.data(), data(), pos);
+        filler(tmp.data() + pos);
+        Tr::copy(tmp.data() + pos + nlen, data() + pos + rlen, size() - pos - rlen + 1);
+        tmp.__set_size(total_size);
+
+        if (tmp.__is_short()) {
+            Tr::copy(data(), tmp.__short_data(), tmp.__short_size() + 1);
+            __set_size(tmp.__short_size());
+        } else {
+            __move_long(std::move(tmp));
+        }
+
+        return *this;
+    }
+
+    constexpr size_type copy(Ch* s, size_type n, size_type pos = 0) const {
+        return view_type(*this).copy(s, n, pos);
+    }
+
+    constexpr void swap(basic_string& o) noexcept(
+        allocator_traits<Allocator>::propagate_on_container_swap::value
+        || allocator_traits<Allocator>::is_always_equal::value
+    ) {
+        if (__is_short() && o.__is_short()) {
+            ranges::swap_ranges(store.short_, o.store.short_);
+        } else if (!__is_short() && !o.__is_short()) {
+            swap(store.long_, o.store.long_);
+        } else {
+            auto& s = __is_short() ? *this : o;
+            auto& l = !__is_short() ? *this : o;
+
+            Ch tmp[short_capacity + 1];
+            auto sz = s.__short_size();
+            Tr::copy(tmp, s.__short_data(), sz + 1);
+            s.__move_long(std::move(tmp));
+            Tr::copy(l.__short_data(), tmp, sz + 1);
+            l.__set_short_size(sz);
+        }
+
+        if constexpr (pocs) swap(alloc_, o.alloc_);
+    }
+
+    // [string.ops], string operations
+    constexpr Ch const* c_str() const noexcept { return data(); }
+    constexpr Ch const* data() const noexcept {
+        return __is_short() ? __short_data() : __long_data();
+    }
+    constexpr Ch* data() noexcept { return __is_short() ? __short_data() : __long_data(); }
+    constexpr operator basic_string_view<Ch, Tr>() const noexcept {
+        return view_type(data(), size());
+    }
+    constexpr allocator_type get_allocator() const noexcept { return alloc_; }
+
+    template<class T>
+    requires(!is_convertible_v<T const&, Ch const*>) && is_convertible_v<T const&, view_type>
+    constexpr size_type find(
+        T const& t, size_type pos = 0
+    ) const noexcept(is_nothrow_convertible_v<T const&, view_type>) {
+        if (auto res = view_type(*this).find(view_type(t), pos); res == view_type::npos)
+            return npos;
+        else
+            return res;
+    }
+    constexpr size_type find(basic_string const& str, size_type pos = 0) const noexcept {
+        return find(view_type(str), pos);
+    }
+    constexpr size_type find(Ch const* s, size_type pos, size_type n) const {
+        return find(view_type(s, n), pos);
+    }
+    constexpr size_type find(Ch const* s, size_type pos = 0) const {
+        return find(view_type(s), pos);
+    }
+    constexpr size_type find(Ch c, size_type pos = 0) const noexcept {
+        return find(view_type(std::addressof(c), 1), pos);
+    }
+    template<class T>
+    requires(!is_convertible_v<T const&, Ch const*>) && is_convertible_v<T const&, view_type>
+    constexpr size_type rfind(
+        T const& t, size_type pos = npos
+    ) const noexcept(is_nothrow_convertible_v<T const&, view_type>) {
+        if (auto res = view_type(*this).rfind(view_type(t), pos); res == view_type::npos)
+            return npos;
+        else
+            return res;
+    }
+    constexpr size_type rfind(basic_string const& str, size_type pos = npos) const noexcept {
+        return rfind(view_type(str), pos);
+    }
+    constexpr size_type rfind(Ch const* s, size_type pos, size_type n) const {
+        return rfind(view_type(s, n), pos);
+    }
+    constexpr size_type rfind(Ch const* s, size_type pos = npos) const {
+        return rfind(view_type(s), pos);
+    }
+    constexpr size_type rfind(Ch c, size_type pos = npos) const noexcept {
+        return rfind(view_type(std::addressof(c), 1), pos);
+    }
+
+    template<class T>
+    requires(!is_convertible_v<T const&, Ch const*>) && is_convertible_v<T const&, view_type>
+    constexpr size_type find_first_of(
+        T const& t, size_type pos = 0
+    ) const noexcept(is_nothrow_convertible_v<T const&, view_type>) {
+        if (auto res = view_type(*this).find_first_of(view_type(t), pos); res == view_type::npos)
+            return npos;
+        else
+            return res;
+    }
+    constexpr size_type find_first_of(basic_string const& str, size_type pos = 0) const noexcept {
+        return find_first_of(view_type(str), pos);
+    }
+    constexpr size_type find_first_of(Ch const* s, size_type pos, size_type n) const {
+        return find_first_of(view_type(s, n), pos);
+    }
+    constexpr size_type find_first_of(Ch const* s, size_type pos = 0) const {
+        return find_first_of(view_type(s), pos);
+    }
+    constexpr size_type find_first_of(Ch c, size_type pos = 0) const noexcept {
+        return find_first_of(view_type(std::addressof(c), 1), pos);
+    }
+    template<class T>
+    requires(!is_convertible_v<T const&, Ch const*>) && is_convertible_v<T const&, view_type>
+    constexpr size_type find_last_of(
+        T const& t, size_type pos = npos
+    ) const noexcept(is_nothrow_convertible_v<T const&, view_type>) {
+        if (auto res = view_type(*this).find_last_of(view_type(t), pos); res == view_type::npos)
+            return npos;
+        else
+            return res;
+    }
+    constexpr size_type find_last_of(basic_string const& str, size_type pos = npos) const noexcept {
+        return find_last_of(view_type(str), pos);
+    }
+    constexpr size_type find_last_of(Ch const* s, size_type pos, size_type n) const {
+        return find_last_of(view_type(s, n), pos);
+    }
+    constexpr size_type find_last_of(Ch const* s, size_type pos = npos) const {
+        return find_last_of(view_type(s), pos);
+    }
+    constexpr size_type find_last_of(Ch c, size_type pos = npos) const noexcept {
+        return find_last_of(view_type(std::addressof(c), 1), pos);
+    }
+
+    template<class T>
+    requires(!is_convertible_v<T const&, Ch const*>) && is_convertible_v<T const&, view_type>
+    constexpr size_type find_first_not_of(
+        T const& t, size_type pos = 0
+    ) const noexcept(is_nothrow_convertible_v<T const&, view_type>) {
+        if (auto res = view_type(*this).find_first_not_of(view_type(t), pos);
+            res == view_type::npos)
+            return npos;
+        else
+            return res;
+    }
+    constexpr size_type
+    find_first_not_of(basic_string const& str, size_type pos = 0) const noexcept {
+        return find_first_not_of(view_type(str), pos);
+    }
+    constexpr size_type find_first_not_of(Ch const* s, size_type pos, size_type n) const {
+        return find_first_not_of(view_type(s, n), pos);
+    }
+    constexpr size_type find_first_not_of(Ch const* s, size_type pos = 0) const {
+        return find_first_not_of(view_type(s), pos);
+    }
+    constexpr size_type find_first_not_of(Ch c, size_type pos = 0) const noexcept {
+        return find_first_not_of(view_type(std::addressof(c), 1), pos);
+    }
+    template<class T>
+    requires(!is_convertible_v<T const&, Ch const*>) && is_convertible_v<T const&, view_type>
+    constexpr size_type find_last_not_of(
+        T const& t, size_type pos = npos
+    ) const noexcept(is_nothrow_convertible_v<T const&, view_type>) {
+        if (auto res = view_type(*this).find_last_not_of(view_type(t), pos); res == view_type::npos)
+            return npos;
+        else
+            return res;
+    }
+    constexpr size_type
+    find_last_not_of(basic_string const& str, size_type pos = npos) const noexcept {
+        return find_last_not_of(view_type(str), pos);
+    }
+    constexpr size_type find_last_not_of(Ch const* s, size_type pos, size_type n) const {
+        return find_last_not_of(view_type(s, n), pos);
+    }
+    constexpr size_type find_last_not_of(Ch const* s, size_type pos = npos) const {
+        return find_last_not_of(view_type(s), pos);
+    }
+    constexpr size_type find_last_not_of(Ch c, size_type pos = npos) const noexcept {
+        return find_last_not_of(view_type(std::addressof(c), 1), pos);
+    }
+
+    constexpr basic_string substr(size_type pos = 0, size_type n = npos) const& {
+        return __self(*this, pos, n);
+    }
+    constexpr basic_string substr(size_type pos = 0, size_type n = npos) && {
+        return __self(std::move(*this), pos, n);
+    }
+    constexpr basic_string_view<Ch, Tr> subview(size_type pos = 0, size_type n = npos) const {
+        return view_type(*this).subview(pos, n);
+    }
+
+    template<class T> requires(!is_convertible_v<T const&, Ch const*>)
+                           && is_convertible_v<T const&, view_type> constexpr int
+    compare(T const& t) const noexcept(is_nothrow_convertible_v<T const&, view_type>) {
+        return view_type(*this).compare(view_type(t));
+    }
+    template<class T>
+    requires(!is_convertible_v<T const&, Ch const*>) && is_convertible_v<T const&, view_type>
+    constexpr int compare(size_type pos1, size_type n1, T const& t) const {
+        return view_type(*this).subview(pos1, n1).compare(view_type(t));
+    }
+    template<class T> requires(!is_convertible_v<T const&, Ch const*>)
+                           && is_convertible_v<T const&, view_type> constexpr int
+    compare(size_type pos1, size_type n1, T const& t, size_type pos2, size_type n2 = npos) const {
+        return view_type(*this).subview(pos1, n1).compare(view_type(t).subview(pos2, n2));
+    }
+
+    constexpr int compare(basic_string const& str) const noexcept {
+        return view_type(*this).compare(view_type(str));
+    }
+    constexpr int compare(size_type pos1, size_type n1, basic_string const& str) const {
+        return view_type(*this).subview(pos1, n1).compare(view_type(str));
+    }
+    constexpr int compare(
+        size_type pos1, size_type n1, basic_string const& str, size_type pos2, size_type n2 = npos
+    ) const {
+        return view_type(*this).subview(pos1, n1).compare(view_type(str).subview(pos2, n2));
+    }
+    constexpr int compare(Ch const* s) const { return view_type(*this).compare(s); }
+    constexpr int compare(size_type pos1, size_type n1, Ch const* s) const {
+        return view_type(*this).subview(pos1, n1).compare(s);
+    }
+    constexpr int compare(size_type pos1, size_type n1, Ch const* s, size_type n2) const {
+        return view_type(*this).subview(pos1, n1).compare(s, n2);
+    }
+
+    constexpr bool starts_with(basic_string_view<Ch, Tr> x) const noexcept {
+        return view_type(*this).starts_with(x);
+    }
+    constexpr bool starts_with(Ch x) const noexcept { return view_type(*this).starts_with(x); }
+    constexpr bool starts_with(Ch const* x) const { return view_type(*this).starts_with(x); }
+    constexpr bool ends_with(basic_string_view<Ch, Tr> x) const noexcept {
+        return view_type(*this).ends_with(x);
+    }
+    constexpr bool ends_with(Ch x) const noexcept { return view_type(*this).ends_with(x); }
+    constexpr bool ends_with(Ch const* x) const { return view_type(*this).ends_with(x); }
+
+    constexpr bool contains(basic_string_view<Ch, Tr> x) const noexcept {
+        return view_type(*this).contains(x);
+    }
+    constexpr bool contains(Ch x) const noexcept { return view_type(*this).contains(x); }
+    constexpr bool contains(Ch const* x) const { return view_type(*this).contains(x); }
+
+private:
+    static constexpr size_t short_bytes       = sizeof(pointer) + 2 * sizeof(size_type);
+    static constexpr size_t short_capacity    = short_bytes / sizeof(Ch) - 1;  // Null byte
+    static constexpr size_type long_flag_mask = size_type(1) << (sizeof(size_type) * 8 - 1);
+    static_assert(endian::native == endian::little);
+
+    struct long_t {
+        pointer ptr_;
+        size_type size_;
+        size_type cap_;  // Use last bit for marking short. this is the msb of cap: and msb of
+                         // short[short_capacity]
+    };
+
+    union {
+        Ch short_[short_capacity + 1]{};
+        long_t long_;
+    } store;
+    [[no_unique_address]] Allocator alloc_;
+
+    constexpr bool __is_short() const noexcept {
+        if consteval {
+            return std::is_within_lifetime(std::addressof(store.short_));
+        } else {
+            return (reinterpret_cast<char const*>(&store)[short_bytes - 1] & 0x80) == 0;
+        }
+    }
+    constexpr size_type __short_size() const noexcept {
+        assert(__is_short());
+        return short_capacity - store.short_[short_capacity];
+    }
+    constexpr size_type __long_size() const noexcept {
+        assert(!__is_short());
+        return store.long_.size_;
+    }
+
+    constexpr size_type __short_cap() const noexcept {
+        assert(__is_short());
+        return short_capacity;
+    }
+    constexpr size_type __long_cap() const noexcept {
+        assert(!__is_short());
+        return store.long_.cap_ & ~long_flag_mask;
+    }
+
+    constexpr Ch* __long_data() noexcept {
+        assert(!__is_short());
+        return std::to_address(store.long_.ptr_);
+    }
+    constexpr Ch const* __long_data() const noexcept {
+        assert(!__is_short());
+        return std::to_address(store.long_.ptr_);
+    }
+
+    constexpr Ch* __short_data() noexcept {
+        assert(__is_short());
+        return store.short_;
+    }
+    constexpr Ch const* __short_data() const noexcept {
+        assert(__is_short());
+        return store.short_;
+    }
+
+    constexpr void __set_long_size(size_type nw) noexcept {
+        assert(!__is_short());
+        store.long_.size_ = nw;
+    }
+    constexpr void __set_short_size(size_type nw) noexcept {
+        assert(__is_short());
+        assert(nw <= short_capacity);
+        store.short_[short_capacity] = short_capacity - nw;
+    }
+    constexpr void __set_size(size_type nw) noexcept {
+        __is_short() ? __set_short_size(nw) : __set_long_size(nw);
+    }
+    constexpr void __set_long_cap(size_type nw) noexcept {
+        assert(!__is_short());
+        assert((nw & long_flag_mask) == 0);
+        store.long_.cap_ = nw | long_flag_mask;
+    }
+
+    constexpr void __engage_long(pointer ptr, size_type sz, size_type cap) noexcept {
+        assert(__is_short());
+        assert((cap & long_flag_mask) == 0);
+        ::new ((void*)&store.long_) long_t{std::move(ptr), sz, cap | long_flag_mask};
+    }
+    constexpr void __disengage_long(size_type short_sz) noexcept {
+        assert(!__is_short());
+        store.long_.~long_t();
+        new ((void*)store.short_) Ch[short_capacity + 1];
+        store.short_[short_sz]       = Ch(0);
+        store.short_[short_capacity] = short_capacity - short_sz;
+    }
+    constexpr void __deallocate_long(size_type short_sz) noexcept {
+        assert(!__is_short());
+        auto req = __long_cap() + 1;
+        Atr::deallocate(alloc_, store.long_.ptr_, req);
+        __disengage_long(short_sz);
+    }
+
+    // Allocates storage for at least sz and sets the size
+    constexpr void __ctor_reserve(size_t cap) {
+        if (cap <= __short_cap()) return;
+        if (cap > max_size()) _THROW(length_error("string"));
+
+        assert((cap & long_flag_mask) == 0);
+        // NOTE here the math needs to know endianness
+        auto [p, c] = Atr::allocate_at_least(alloc_, cap + 1);
+        if consteval { ::new (std::to_address(p)) Ch[c]; }
+        // Mask the msb. if it is set then we can pass this bigger value too...
+        // TODO should we set to largest value then? (-1) >> 1 this isn't exactly a likely case
+        __engage_long(p, 0, (c - 1) & ~long_flag_mask);
+    }
+
+    // Resize space for sz chars.
+    constexpr void __ctor_resize(size_type sz) {
+        __ctor_reserve(sz);
+        __set_size(sz);
+    }
+
+    constexpr void __set_short_null() noexcept {
+        Tr::assign(__short_data()[__short_size()], Ch(0));
+    }
+    constexpr void __set_long_null() noexcept { Tr::assign(__long_data()[__long_size()], Ch(0)); }
+    constexpr void __set_null() noexcept { Tr::assign(data()[size()], Ch()); }
+
+    [[nodiscard]] constexpr size_type __calculate_growth(size_type target_size) const {
+        size_type const max_cap = Atr::max_size(alloc_);
+
+        // Prevent overflow: if cap_ is already large, cap_ + (cap_ >> 1) could wrap
+        if (capacity() > max_cap - (capacity() >> 1)) { return max_cap; }
+
+        // 1.5x integer growth: cap + (cap / 2)
+        // Seed with 4 when empty
+        size_type const geometric = capacity() + (capacity() >> 1);
+
+        // Pick whichever is larger: the geometric step or the exact target
+        return std::ranges::max(target_size, geometric);
+    }
+
+    constexpr void __move_long(basic_string&& o) noexcept {
+        assert(!o.__is_short());
+        if (!__is_short()) __deallocate_long(0);
+
+        __engage_long(std::move(o.store.long_.ptr_), o.__long_size(), o.__long_cap());
+        o.__disengage_long(0);
+    }
+
+    constexpr bool __is_aliasing_pointer(Ch const* ptr) {
+        if consteval {
+            return true;
+        } else {
+            return std::ranges::less_equal()(data(), ptr)
+                && std::ranges::less_equal()(ptr, data() + size());
+        }
+    }
+};
+
+template<
+    __detail::__LegacyInputIterator InputIterator,
+    __simple_allocator Allocator = allocator<typename iterator_traits<InputIterator>::value_type>>
+basic_string(InputIterator, InputIterator, Allocator = Allocator()) -> basic_string<
+    typename iterator_traits<InputIterator>::value_type,
+    char_traits<typename iterator_traits<InputIterator>::value_type>, Allocator>;
+
+template<ranges::input_range R, __simple_allocator Allocator = allocator<ranges::range_value_t<R>>>
+basic_string(from_range_t, R&&, Allocator = Allocator())
+    -> basic_string<ranges::range_value_t<R>, char_traits<ranges::range_value_t<R>>, Allocator>;
+
+template<class Ch, class Tr, __simple_allocator Allocator = allocator<Ch>>
+explicit basic_string(basic_string_view<Ch, Tr>, Allocator const& = Allocator())
+    -> basic_string<Ch, Tr, Allocator>;
+
+template<class Ch, class Tr, __simple_allocator Allocator = allocator<Ch>>
+basic_string(
+    basic_string_view<Ch, Tr>, typename allocator_traits<Allocator>::size_type,
+    typename allocator_traits<Allocator>::size_type, Allocator const& = Allocator()
+) -> basic_string<Ch, Tr, Allocator>;
+
+using string    = basic_string<char>;
+using u8string  = basic_string<char8_t>;
+using u16string = basic_string<char16_t>;
+using u32string = basic_string<char32_t>;
+using wstring   = basic_string<wchar_t>;
+
+template<class charT, class traits, class Allocator>
+constexpr void swap(
+    basic_string<charT, traits, Allocator>& lhs, basic_string<charT, traits, Allocator>& rhs
+) noexcept(noexcept(lhs.swap(rhs))) {
+    lhs.swap(rhs);
+}
+
+template<class charT, class traits, class Allocator, class U = charT>
+constexpr basic_string<charT, traits, Allocator>::size_type
+erase(basic_string<charT, traits, Allocator>& c, U const& value) {
+    auto [b, e] = ranges::remove(c, value);
+    c.erase(b, e);
+    return static_cast<basic_string<charT, traits, Allocator>::size_type>(e - b);
+}
+
+template<class charT, class traits, class Allocator, class Predicate>
+constexpr basic_string<charT, traits, Allocator>::size_type
+erase_if(basic_string<charT, traits, Allocator>& c, Predicate pred) {
+    auto [b, e] = ranges::remove_if(c, std::ref(pred));
+    c.erase(b, e);
+    return static_cast<basic_string<charT, traits, Allocator>::size_type>(e - b);
+}
+
+template<class A> struct hash<basic_string<char, char_traits<char>, A>> {
+    static constexpr size_t operator()(basic_string<char, char_traits<char>, A> const& s) noexcept {
+        return __detail::hash_bytes(s.data(), s.size());
+    }
+};
+
+template<class charT, class traits, class Allocator>
+constexpr basic_string<charT, traits, Allocator> operator+(
+    basic_string<charT, traits, Allocator> const& lhs,
+    basic_string<charT, traits, Allocator> const& rhs
+) {
+    return lhs + rhs.subview();
+}
+
+template<class charT, class traits, class Allocator>
+constexpr basic_string<charT, traits, Allocator> operator+(
+    basic_string<charT, traits, Allocator>&& lhs, basic_string<charT, traits, Allocator> const& rhs
+) {
+    lhs.append(rhs);
+    return lhs;
+}
+
+template<class charT, class traits, class Allocator>
+constexpr basic_string<charT, traits, Allocator> operator+(
+    basic_string<charT, traits, Allocator> const& lhs, basic_string<charT, traits, Allocator>&& rhs
+) {
+    rhs.insert(0, lhs);
+    return rhs;
+}
+
+template<class charT, class traits, class Allocator>
+constexpr basic_string<charT, traits, Allocator> operator+(
+    basic_string<charT, traits, Allocator>&& lhs, basic_string<charT, traits, Allocator>&& rhs
+) {
+    auto const total = lhs.size() + rhs.size();
+
+    if (lhs.capacity() >= total) {
+        lhs.append(rhs);
+        return lhs;
+    } else if (
+        rhs.capacity() >= total
+        && (allocator_traits<Allocator>::is_always_equal::value
+            || lhs.get_allocator() == rhs.get_allocator())
+    ) {
+        rhs.insert(0, lhs);
+        return rhs;
+    } else {
+        lhs.append(rhs);
+        return lhs;
+    }
+}
+
+template<class charT, class traits, class Allocator>
+constexpr basic_string<charT, traits, Allocator>
+operator+(charT const* lhs, basic_string<charT, traits, Allocator> const& rhs) {
+    return basic_string_view<charT, traits>(lhs) + rhs;
+}
+
+template<class charT, class traits, class Allocator>
+constexpr basic_string<charT, traits, Allocator>
+operator+(charT const* lhs, basic_string<charT, traits, Allocator>&& rhs) {
+    rhs.insert(0, lhs);
+    return rhs;
+}
+
+template<class charT, class traits, class Allocator>
+constexpr basic_string<charT, traits, Allocator>
+operator+(charT lhs, basic_string<charT, traits, Allocator> const& rhs) {
+    return basic_string_view<charT, traits>(std::addressof(lhs), 1) + rhs;
+}
+
+template<class charT, class traits, class Allocator>
+constexpr basic_string<charT, traits, Allocator>
+operator+(charT lhs, basic_string<charT, traits, Allocator>&& rhs) {
+    rhs.insert(0, 1, lhs);
+    return rhs;
+}
+
+template<class charT, class traits, class Allocator>
+constexpr basic_string<charT, traits, Allocator>
+operator+(basic_string<charT, traits, Allocator> const& lhs, charT const* rhs) {
+    return lhs + basic_string_view<charT, traits>(rhs);
+}
+
+template<class charT, class traits, class Allocator>
+constexpr basic_string<charT, traits, Allocator>
+operator+(basic_string<charT, traits, Allocator>&& lhs, charT const* rhs) {
+    lhs.append(rhs);
+    return lhs;
+}
+
+template<class charT, class traits, class Allocator>
+constexpr basic_string<charT, traits, Allocator>
+operator+(basic_string<charT, traits, Allocator> const& lhs, charT rhs) {
+    return lhs + basic_string_view<charT, traits>(std::addressof(rhs), 1);
+}
+
+template<class charT, class traits, class Allocator>
+constexpr basic_string<charT, traits, Allocator>
+operator+(basic_string<charT, traits, Allocator>&& lhs, charT rhs) {
+    lhs.push_back(rhs);
+    return lhs;
+}
+
+template<class charT, class traits, class Allocator>
+constexpr basic_string<charT, traits, Allocator> operator+(
+    basic_string<charT, traits, Allocator> const& lhs,
+    type_identity_t<basic_string_view<charT, traits>> rhs
+) {
+    basic_string<charT, traits, Allocator> r(
+        allocator_traits<Allocator>::select_on_container_copy_construction(lhs.get_allocator())
+    );
+    r.reserve(lhs.size() + rhs.size());
+    r.append(lhs);
+    r.append(rhs);
+    return r;
+}
+
+template<class charT, class traits, class Allocator>
+constexpr basic_string<charT, traits, Allocator> operator+(
+    basic_string<charT, traits, Allocator>&& lhs,
+    type_identity_t<basic_string_view<charT, traits>> rhs
+) {
+    lhs.append(rhs);
+    return lhs;
+}
+
+template<class charT, class traits, class Allocator>
+constexpr basic_string<charT, traits, Allocator> operator+(
+    type_identity_t<basic_string_view<charT, traits>> lhs,
+    basic_string<charT, traits, Allocator> const& rhs
+) {
+    basic_string<charT, traits, Allocator> r(
+        allocator_traits<Allocator>::select_on_container_copy_construction(rhs.get_allocator())
+    );
+    r.reserve(lhs.size() + rhs.size());
+    r.append(lhs);
+    r.append(rhs);
+    return r;
+}
+
+template<class charT, class traits, class Allocator>
+constexpr basic_string<charT, traits, Allocator> operator+(
+    type_identity_t<basic_string_view<charT, traits>> lhs,
+    basic_string<charT, traits, Allocator>&& rhs
+) {
+    rhs.insert(0, lhs);
+    return rhs;
+}
+
+template<class charT, class traits, class Allocator>
+constexpr bool operator==(
+    basic_string<charT, traits, Allocator> const& lhs,
+    basic_string<charT, traits, Allocator> const& rhs
+) noexcept {
+    return lhs.subview() == rhs.subview();
+}
+
+template<class charT, class traits, class Allocator>
+constexpr bool operator==(basic_string<charT, traits, Allocator> const& lhs, charT const* rhs) {
+    return lhs.subview() == rhs;
+}
+
+template<class charT, class traits, class Allocator>
+constexpr __sv_comp_cat<traits> operator<=>(
+    basic_string<charT, traits, Allocator> const& lhs,
+    basic_string<charT, traits, Allocator> const& rhs
+) noexcept {
+    return lhs.subview() <=> rhs.subview();
+}
+
+template<class charT, class traits, class Allocator>
+constexpr __sv_comp_cat<traits>
+operator<=>(basic_string<charT, traits, Allocator> const& lhs, charT const* rhs) {
+    return lhs.subview() <=> rhs;
+}
+
+inline namespace literals {
+inline namespace string_literals {
+
+constexpr string operator""s(char const* str, size_t len) {
+    return string(str, len);
+}
+
+// TODO enable after char_traits gets done
+// constexpr u8string operator""s(char8_t const* str, size_t len) {
+//     return u8string(str, len);
+// }
+// constexpr u16string operator""s(char16_t const* str, size_t len) {
+//     return u16string(str, len);
+// }
+// constexpr u32string operator""s(char32_t const* str, size_t len) {
+//     return u32string(str, len);
+// }
+// constexpr wstring operator""s(wchar_t const* str, size_t len) {
+//     return wstring(str, len);
+// }
+
+}  // namespace string_literals
+}  // namespace literals
+
+}  // namespace std

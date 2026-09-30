@@ -84,7 +84,7 @@ struct __fn {
     }
 
     // Path B: Type-specific custom ADL overload resolution pass
-    template<class T, class U> requires(!__is_rref<T>::value && !__is_rref<U>::value)
+    template<class T, class U> requires(!__is_rref<T&&>::value && !__is_rref<U&&>::value)
                                     && requires(T&& t, U&& u) { swap(FWD(t), FWD(u)); }
     constexpr void operator()(T&& t, U&& u) const noexcept(noexcept(swap(FWD(t), FWD(u)))) {
         swap(FWD(t), FWD(u));

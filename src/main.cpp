@@ -1,11 +1,12 @@
 
 
 #include <array>
+#include <memory>
 #include <ranges>
 #include <string_view>
 #include <tuple>
 #include <type_traits>
-#include <utility>
+#include <string>
 
 long long volatile write = 0;
 long long volatile r2    = 65;
@@ -25,17 +26,21 @@ struct A {
     return a / b;
 }
 
+constexpr size_t test2() {
+    std::string a("aa");
+    a.assign("Hello");
+    a.insert(1, "moi");
+    return a.size();
+}
+
+
 extern "C" int main() {
-    auto arr = std::array{1, 2, 3, 4};
-    auto v   = std::ranges::views::cartesian_product(arr, arr);
+    static constexpr auto x = test2();
 
-    for (auto [a, b]: std::views::cartesian_product(arr, arr)) { write = a + b; }
+    int arr[x];
 
-    print("hello");
+    constexpr auto u = std::bit_expand(0b1101u, 0b1011u);
 
     return 0;
 }
 
-void test2() {
-    main();
-}

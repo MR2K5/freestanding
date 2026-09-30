@@ -10,6 +10,11 @@
 
 namespace std {
 
+class bad_optional_access: public exception {
+public:
+    constexpr char const* what() const noexcept override { return "bad_optional_access"; }
+};
+
 template<class T> class optional;
 template<class T>
 concept __is_derived_from_optional = requires(T const& t) {
@@ -259,10 +264,29 @@ public:
     constexpr explicit operator bool() const noexcept { return is_active; }
     constexpr bool has_value() const noexcept { return is_active; }
 
-    constexpr T const& value() const&   = delete ("TODO: needs exceptions");
-    constexpr T& value() &              = delete ("TODO: needs exceptions");
-    constexpr T&& value() &&            = delete ("TODO: needs exceptions");
-    constexpr T const&& value() const&& = delete ("TODO: needs exceptions");
+#ifdef _STL_HAS_EH
+    constexpr T const& value() const& {
+        if (!has_value()) _THROW(bad_optional_access());
+        return **this;
+    }
+    constexpr T& value() & {
+        if (!has_value()) _THROW(bad_optional_access());
+        return **this;
+    }
+    constexpr T&& value() && {
+        if (!has_value()) _THROW(bad_optional_access());
+        return std::move(**this);
+    }
+    constexpr T const&& value() const&& {
+        if (!has_value()) _THROW(bad_optional_access());
+        return std::move(**this);
+    }
+#else
+    constexpr T const& value() const&   = _DELETE_NO_EXCEPTIONS;
+    constexpr T& value() &              = _DELETE_NO_EXCEPTIONS;
+    constexpr T&& value() &&            = _DELETE_NO_EXCEPTIONS;
+    constexpr T const&& value() const&& = _DELETE_NO_EXCEPTIONS;
+#endif
 
     template<class U = remove_cv_t<T>> constexpr T value_or(U&& v) const& {
         static_assert(is_copy_constructible_v<T> && is_convertible_v<U&&, T>);
